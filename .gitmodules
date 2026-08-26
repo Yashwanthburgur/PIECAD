@@ -1,0 +1,3 @@
+[submodule "adapters/freecad/mcp_server"]
+	path = adapters/freecad/mcp_server
+	url = https://github.com/spkane/freecad-addon-robust-mcp-server

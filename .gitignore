@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# CAD & Temporary
+*.FCStd1
+*.FCStd2
+*.lock
+
+# OS & Editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
