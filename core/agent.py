@@ -1,58 +1,68 @@
-"""PieCAD Core Agent Loop."""
+"""PieCAD Core Agent Loop. Pure orchestration."""
 
 import json
-from typing import Any, Dict, List, Tuple
+import logging
+from typing import Any, Dict, List, Optional, Tuple
+
 from providers.llm.provider import LLMProvider
+from core.adapters.interfaces import CADAdapter
 
-CAD_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "create_box",
-            "description": "Create a 3D box solid in the active FreeCAD document.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "length": {"type": "number", "description": "Length along X axis in mm"},
-                    "width": {"type": "number", "description": "Width along Y axis in mm"},
-                    "height": {"type": "number", "description": "Height along Z axis in mm"},
-                },
-                "required": ["length", "width", "height"],
-            },
-        },
-    }
-]
+logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are PieCAD, an expert CAD modeling assistant.
-When a user asks to generate or manipulate geometry, invoke the relevant CAD tool.
-Be concise and confirm actions clearly."""
-
+SYSTEM_PROMPT = """You are PieCAD, an expert mechanical engineering assistant.
+You translate intent into structured tool calls.
+If multiple steps are needed, sequence them properly. Always use the provided tools."""
 
 class CADAgent:
-    def __init__(self):
-        self.provider = LLMProvider()
+    def __init__(self, adapter: CADAdapter, provider: Optional[LLMProvider] = None) -> None:
+        self.provider = provider or LLMProvider()
+        self.adapter = adapter
         self.messages: List[Dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT}
         ]
 
-    def handle_message(self, user_message: str) -> Tuple[str, List[Dict[str, Any]]]:
-        self.messages.append({"role": "user", "content": user_message})
+    def handle_message(self, user_message: str) -> str:
+        """Process user intent, call LLM, and execute via Adapter."""
+        self.messages.append({"role": "user", "content": str(user_message).strip()})
+        
+        # 1. Ask adapter for capabilities
+        tools = self.adapter.get_tools()
 
+        # 2. Get LLM intent
         response_msg = self.provider.generate_with_tools(
             messages=self.messages,
-            tools=CAD_TOOLS
+            tools=tools,
         )
 
-        tool_calls_list = []
-        if response_msg.tool_calls:
-            for tc in response_msg.tool_calls:
-                tool_calls_list.append({
-                    "name": tc.function.name,
-                    "args": json.loads(tc.function.arguments)
-                })
-            reply = f"Generated {len(tool_calls_list)} CAD action(s)."
-        else:
+        # Handle conversational fallback
+        if not hasattr(response_msg, "tool_calls") or not response_msg.tool_calls:
             reply = response_msg.content or "Done."
+            self.messages.append({"role": "assistant", "content": reply})
+            return reply
 
-        self.messages.append({"role": "assistant", "content": reply})
-        return reply, tool_calls_list
+        # 3. Execute Intent through the Adapter
+        execution_results = []
+        assistant_payload = {"role": "assistant", "content": None, "tool_calls": []}
+        
+        for tc in response_msg.tool_calls:
+            name = tc.function.name
+            args = json.loads(tc.function.arguments)
+            
+            # Serialize for history
+            assistant_payload["tool_calls"].append({
+                "id": tc.id, "type": "function",
+                "function": {"name": name, "arguments": tc.function.arguments}
+            })
+
+            # EXECUTION BOUNDARY: Hand off to CADAdapter
+            try:
+                result = self.adapter.execute_command(name, args)
+                execution_results.append(result)
+            except Exception as e:
+                execution_results.append(f"Error executing {name}: {str(e)}")
+
+        self.messages.append(assistant_payload)
+        
+        # For Sprint 3A, summarize results to the user
+        summary = "\n".join(execution_results)
+        return f"Execution complete:\n{summary}"

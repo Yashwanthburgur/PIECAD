@@ -1,23 +1,22 @@
+"""PieCAD Core Adapter Interfaces."""
+
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
 class CADAdapter(ABC):
-    """
-    The boundary between PieCAD's core and a specific CAD system.
-    No CAD-specific imports (e.g., FreeCAD, Part) are allowed outside of implementations of this interface.
-    """
+    """Abstract interface for all CAD systems (FreeCAD, Onshape, etc.)."""
 
     @abstractmethod
-    def connect(self) -> bool:
-        """Establish connection to the CAD application."""
+    def get_tools(self) -> List[Dict[str, Any]]:
+        """Return the list of tool schemas supported by this CAD system."""
         pass
 
     @abstractmethod
     def execute_command(self, tool_name: str, parameters: Dict[str, Any]) -> Any:
-        """Execute a generalized CAD command."""
+        """Execute a specific structured tool call against the CAD system."""
         pass
-
+    
     @abstractmethod
     def get_state(self) -> Dict[str, Any]:
-        """Retrieve the current authoritative state from the CAD application."""
+        """Return current CAD workspace state (e.g., connection status)."""
         pass

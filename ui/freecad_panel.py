@@ -1,52 +1,23 @@
-"""PieCAD Dockable Panel for FreeCAD - Plug-and-Play Native Integration."""
+"""PieCAD Dockable Panel for FreeCAD - Pure UI Client."""
 
 import json
 import urllib.request
 import urllib.error
 
-import FreeCAD as App
 import FreeCADGui as Gui
 
 try:
-    from PySide6 import QtWidgets, QtCore, QtGui
+    from PySide6 import QtWidgets, QtCore
 except ImportError:
     try:
-        from PySide2 import QtWidgets, QtCore, QtGui
+        from PySide2 import QtWidgets, QtCore
     except ImportError:
         from PySide import QtGui as QtWidgets
-        from PySide import QtCore, QtGui
+        from PySide import QtCore
 
 
-# --- Local CAD Engine (Direct Execution - Zero External RPCs Needed) ---
-def execute_cad_action(tool_name: str, params: dict) -> str:
-    """Executes geometry creation directly in FreeCAD's native C++ engine."""
-    doc = App.ActiveDocument
-    if not doc:
-        doc = App.newDocument("PieCAD_Model")
-
-    if tool_name == "create_box":
-        import Part
-        length = float(params.get("length", 10.0))
-        width = float(params.get("width", 10.0))
-        height = float(params.get("height", 10.0))
-        
-        box = doc.addObject("Part::Box", "Box")
-        box.Length = length
-        box.Width = width
-        box.Height = height
-        doc.recompute()
-        try:
-            Gui.SendMsgToActiveView("ViewFit")
-        except Exception:
-            pass
-        return f"Created Box ({length}x{width}x{height} mm) in {doc.Name}"
-
-    return f"Unknown CAD tool: {tool_name}"
-
-
-# --- Background Worker for HTTP Calls ---
 class RequestWorker(QtCore.QThread):
-    response_received = QtCore.Signal(dict)
+    response_received = QtCore.Signal(str)
     error_occurred = QtCore.Signal(str)
 
     def __init__(self, url: str, message: str):
@@ -65,14 +36,13 @@ class RequestWorker(QtCore.QThread):
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
                 res_data = json.loads(response.read().decode("utf-8"))
-                self.response_received.emit(res_data)
+                self.response_received.emit(res_data.get("reply", "No reply."))
         except urllib.error.URLError as e:
             self.error_occurred.emit(f"Backend unreachable: {e.reason}")
         except Exception as e:
             self.error_occurred.emit(f"Error: {str(e)}")
 
 
-# --- Main UI Panel ---
 class PieCADPanel(QtWidgets.QDockWidget):
     def __init__(self, parent=None):
         super().__init__("PieCAD Copilot", parent)
@@ -86,8 +56,8 @@ class PieCADPanel(QtWidgets.QDockWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
-        # Header / Status
-        self.status_label = QtWidgets.QLabel("● Ready | Connected to Core")
+        # Status Label
+        self.status_label = QtWidgets.QLabel("Ready | Connected to Core")
         self.status_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 11px;")
         layout.addWidget(self.status_label)
 
@@ -109,7 +79,7 @@ class PieCADPanel(QtWidgets.QDockWidget):
 
         # Input Box
         self.prompt_input = QtWidgets.QLineEdit()
-        self.prompt_input.setPlaceholderText("Describe CAD shape (e.g. 'Make a 30x20x10 box')...")
+        self.prompt_input.setPlaceholderText("Describe CAD shape (e.g. 'Make a 100x50x20 box')...")
         self.prompt_input.setStyleSheet("""
             QLineEdit {
                 background-color: #2a2a2a;
@@ -178,35 +148,23 @@ class PieCADPanel(QtWidgets.QDockWidget):
         self.append_log("You", text, "#4fc3f7")
         self.prompt_input.clear()
         self.send_btn.setEnabled(False)
-        self.status_label.setText("● Processing with LLM...")
+        self.status_label.setText("Processing with LLM...")
         self.status_label.setStyleSheet("color: #FFC107; font-weight: bold; font-size: 11px;")
 
-        self.worker = RequestWorker("http://localhost:8000/chat", text)
+        self.worker = RequestWorker("http://127.0.0.1:8000/chat", text)
         self.worker.response_received.connect(self.on_success)
         self.worker.error_occurred.connect(self.on_error)
         self.worker.start()
 
-    def on_success(self, data: dict):
-        reply = data.get("reply", "")
-        tool_calls = data.get("tool_calls", [])
-
-        # Execute any CAD actions locally in FreeCAD
-        for tool in tool_calls:
-            name = tool.get("name")
-            args = tool.get("args", {})
-            result = execute_cad_action(name, args)
-            self.append_log("CAD Engine", result, "#81c784")
-
-        if reply:
-            self.append_log("PieCAD", reply, "#e0e0e0")
-
-        self.status_label.setText("● Ready")
+    def on_success(self, reply: str):
+        self.append_log("PieCAD", reply, "#81c784")
+        self.status_label.setText("Ready")
         self.status_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 11px;")
         self.send_btn.setEnabled(True)
 
     def on_error(self, error_msg: str):
         self.append_log("System Error", error_msg, "#e57373")
-        self.status_label.setText("● Error")
+        self.status_label.setText("Error")
         self.status_label.setStyleSheet("color: #e57373; font-weight: bold; font-size: 11px;")
         self.send_btn.setEnabled(True)
 
@@ -223,5 +181,5 @@ def load_in_freecad():
     panel.show()
 
 
-if __name__ == "__main__":
-    load_in_freecad()
+# Directly execute load when run via exec()
+load_in_freecad()
