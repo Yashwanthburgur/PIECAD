@@ -18,7 +18,7 @@ runs on the main thread — so objects render immediately.
 Usage (paste into the FreeCAD Python console):
 
     import sys, threading
-    sys.path.insert(0, r"C:/Users/Yashwanth/OneDrive/Desktop/pieCAD/adapters/freecad")
+    sys.path.insert(0, str(PROJECT_ROOT / "adapters/freecad"))
     import bridge
 
     bridge.install_main_thread_processor()   # MUST run on the main/console thread
@@ -26,20 +26,25 @@ Usage (paste into the FreeCAD Python console):
     t = threading.Thread(target=lambda: bridge.start(port=9876), daemon=True)
     t.start()
 
-    panel_path = r"C:/Users/Yashwanth/OneDrive/Desktop/pieCAD/ui/freecad_panel.py"
+    panel_path = PROJECT_ROOT / "ui/freecad_panel.py"
     with open(panel_path, encoding="utf-8") as f:
         exec(f.read)
 """
 
-import queue
-import threading
-import uuid
-import xmlrpc.server
-import json
-
-import FreeCAD as App
-import FreeCADGui as Gui
 import Part
+import FreeCADGui as Gui
+import FreeCAD as App
+import json
+import xmlrpc.server
+import uuid
+import threading
+import queue
+import os
+from pathlib import Path
+
+# Dynamically resolve project root (two levels up from this file's directory)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 # Import QtCore robustly across FreeCAD Qt bindings.
 try:
