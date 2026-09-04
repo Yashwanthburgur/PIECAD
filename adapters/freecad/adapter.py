@@ -34,7 +34,7 @@ class FreeCADAdapter(CADAdapter):
     # CADAdapter.get_tools() -> WHAT the agent may request.
     # ------------------------------------------------------------------ #
     def get_tools(self) -> List[Dict[str, Any]]:
-        """Return OpenAI-compatible function schemas for the 5 core operations."""
+        """Return OpenAI-compatible function schemas for the 6 core operations."""
         return [
             {
                 "type": "function",
@@ -116,6 +116,23 @@ class FreeCADAdapter(CADAdapter):
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "translate",
+                    "description": "Translate an object by (x, y, z) coordinates before boolean operations.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "object_name": _str_schema("Name of the object to translate."),
+                            "x": _num_schema("Translation in mm along X axis."),
+                            "y": _num_schema("Translation in mm along Y axis."),
+                            "z": _num_schema("Translation in mm along Z axis."),
+                        },
+                        "required": ["object_name", "x", "y", "z"],
+                    },
+                },
+            },
         ]
 
     # ------------------------------------------------------------------ #
@@ -174,6 +191,16 @@ class FreeCADAdapter(CADAdapter):
                     )
                 )
 
+            if tool_name == "translate":
+                return str(
+                    self._proxy.translate(
+                        str(parameters["object_name"]),
+                        float(parameters["x"]),
+                        float(parameters["y"]),
+                        float(parameters["z"]),
+                    )
+                )
+
             raise NotImplementedError(
                 f"Tool '{tool_name}' is not supported by the FreeCAD adapter."
             )
@@ -200,5 +227,17 @@ class FreeCADAdapter(CADAdapter):
             ) from e
 
     # ------------------------------------------------------------------ #
-    def get_state(self) -> Dict[str, Any]:
-        return {"status": "connected", "rpc_url": self.url}
+    # CADAdapter.get_state() -> Return a JSON string representing the current document objects.
+    # ------------------------------------------------------------------ #
+    def get_state(self) -> str:
+        """Return a JSON string representing the current document objects.
+
+        Calls the bridge's get_state method and returns the JSON result.
+        Catches connection errors gracefully, returning "[]" if the bridge is not reachable.
+        """
+        try:
+            return str(self._proxy.get_state())
+        except (ConnectionError, OSError):
+            return "[]"
+        except Exception:
+            return "[]"

@@ -28,13 +28,14 @@ Usage (paste into the FreeCAD Python console):
 
     panel_path = r"C:/Users/Yashwanth/OneDrive/Desktop/pieCAD/ui/freecad_panel.py"
     with open(panel_path, encoding="utf-8") as f:
-        exec(f.read())
+        exec(f.read)
 """
 
 import queue
 import threading
 import uuid
 import xmlrpc.server
+import json
 
 import FreeCAD as App
 import FreeCADGui as Gui
@@ -182,12 +183,66 @@ def _impl_set_param(object_name, param_name, value):
     return f"Successfully updated {object_name}.{param_name} to {value}."
 
 
+def _impl_get_state():
+    """Get state of all objects in the active document.
+
+    Runs on the main thread via the QTimer queue system.
+    Returns a JSON string with object names, types, and basic parametric properties.
+    """
+    doc = _active_doc()
+    objects_state = []
+    for obj in doc.Objects:
+        obj_info = {
+            "Name": obj.Name,
+            "TypeId": obj.TypeId,
+        }
+        # Extract basic parametric properties if they exist
+        for param in ["Length", "Width", "Height", "Radius"]:
+            if hasattr(obj, param):
+                obj_param = getattr(obj, param)
+                # Handle Part::Cylinder where Radius might be a sub-object attribute
+                try:
+                    obj_info[param] = float(obj_param)
+                except (TypeError, ValueError):
+                    pass
+        objects_state.append(obj_info)
+    return json.dumps(objects_state)
+
+
+def _impl_translate(object_name, x, y, z):
+    """Translate an object by (x, y, z) coordinates.
+
+    Runs on the main thread via the QTimer queue system.
+    Preserves existing rotation when setting new position.
+    """
+    doc = _active_doc()
+    obj = doc.getObject(object_name)
+    if obj is None:
+        return f"Error: Object '{object_name}' not found in active document."
+
+    # Capture current rotation to preserve it
+    current_rot = obj.Placement.Rotation if hasattr(
+        obj.Placement, 'Rotation') else App.Rotation()
+
+    # Create new position vector
+    new_pos = App.Vector(float(x), float(y), float(z))
+
+    # Overwrite entire placement preserving rotation
+    obj.Placement = App.Placement(new_pos, current_rot)
+
+    # Sync and return success
+    doc.recompute()
+    return f"Successfully translated '{object_name}' to ({float(x)}, {float(y)}, {float(z)})"
+
+
 _IMPLEMENTATIONS = {
     "create_box": _impl_create_box,
     "create_cylinder": _impl_create_cylinder,
     "boolean_cut": _impl_boolean_cut,
     "fillet_edges": _impl_fillet_edges,
     "set_param": _impl_set_param,
+    "get_state": _impl_get_state,
+    "translate": _impl_translate,
 }
 
 
@@ -279,12 +334,22 @@ def set_param(object_name, param_name, value):
     return _execute_on_main_thread("set_param", object_name, param_name, value)
 
 
+def get_state():
+    return _execute_on_main_thread("get_state")
+
+
+def translate(object_name, x, y, z):
+    return _execute_on_main_thread("translate", object_name, x, y, z)
+
+
 _HANDLERS = {
     "create_box": create_box,
     "create_cylinder": create_cylinder,
     "boolean_cut": boolean_cut,
     "fillet_edges": fillet_edges,
     "set_param": set_param,
+    "get_state": get_state,
+    "translate": translate,
 }
 
 

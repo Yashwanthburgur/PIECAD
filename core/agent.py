@@ -14,29 +14,40 @@ class CADAgent:
 
     def handle_message(self, user_message: str) -> str:
         self.messages.append({"role": "user", "content": user_message.strip()})
-        
+
         # 1. Ask adapter for its active tools
         tools = self.adapter.get_tools()
 
-        # 2. Get intent from LLM
+        # 2. Get current CAD state
+        try:
+            state_json = self.adapter.get_state()
+        except Exception:
+            state_json = "[]"
+
+        # 3. Inject state into LLM context so it knows what exists
+        self.messages.append(
+            {"role": "system", "content": f"CURRENT CAD STATE: {state_json}"}
+        )
+
+        # 4. Get intent from LLM
         response = self.provider.generate_with_tools(messages=self.messages, tools=tools)
+        
+        # 5. Execute the tools and return the result string
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            results = []
+            for tool_call in response.tool_calls:
+                name = tool_call.function.name
+                args = json.loads(tool_call.function.arguments)
+                try:
+                    res = self.adapter.execute_command(name, args)
+                    results.append(res)
+                except Exception as e:
+                    results.append(f"Execution error on {name}: {e}")
+            return "\n".join(results)
+            
+        # If it just wants to talk, return its text
+        if hasattr(response, "content") and response.content:
+            return response.content
 
-        if not getattr(response, "tool_calls", None):
-            reply = response.content or "Done."
-            self.messages.append({"role": "assistant", "content": reply})
-            return reply
-
-        # 3. Execute tool calls through the adapter
-        results = []
-        for tc in response.tool_calls:
-            name = tc.function.name
-            args = json.loads(tc.function.arguments)
-            try:
-                out = self.adapter.execute_command(name, args)
-                results.append(out)
-            except Exception as e:
-                results.append(f"Execution error on {name}: {e}")
-
-        summary = "\n".join(results)
-        self.messages.append({"role": "assistant", "content": summary})
-        return summary
+        # Ultimate fallback so it NEVER returns None and crashes the API
+        return str(response) or "Command processed."
