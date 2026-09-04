@@ -24,6 +24,60 @@ class CADAgent:
         self.provider = provider or LLMProvider()
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
+    def _summarize_state(self, state_str: str, max_items: int = 10) -> str:
+        """Summarize CAD state to prevent context exhaustion on large assemblies.
+
+        Handles both JSON dict (property-based) and JSON list (object-based) states.
+        For lists, keeps only the most recently added max_items objects.
+        """
+        # Try to parse state_str as JSON
+        try:
+            parsed_state = json.loads(state_str)
+        except (json.JSONDecodeError, TypeError):
+            # If parsing fails, return as-is
+            return state_str
+
+        # If it's a list (object-based state, e.g., from FreeCAD)
+        if isinstance(parsed_state, list):
+            # If the number of items is <= max_items, return the original JSON string
+            if len(parsed_state) <= max_items:
+                return state_str
+
+            # If > max_items, keep only the most recent max_items objects
+            if len(parsed_state) > max_items:
+                omitted = len(parsed_state) - max_items
+                recent_objects = parsed_state[-max_items:]
+
+                # Return a new JSON dictionary wrapping the state
+                return json.dumps({
+                    "__META__": f"{omitted} older objects omitted to save context.",
+                    "objects": recent_objects
+                })
+
+        # If it's a dict (property-based state)
+        if isinstance(parsed_state, dict):
+            # If the number of keys is <= max_items, return the original JSON string
+            if len(parsed_state) <= max_items:
+                return state_str
+
+            # If > max_items, extract the LAST max_items (most recently added geometry)
+            if len(parsed_state) > max_items:
+                # Get the last max_items keys (most recent objects)
+                recent_keys = list(parsed_state.keys())[-max_items:]
+                omitted_count = len(parsed_state) - max_items
+
+                # Build new dict with meta-key and recent objects only
+                summarized = {
+                    "__META__": f"{omitted_count} older objects omitted to save context."}
+                for key in recent_keys:
+                    if key in parsed_state:
+                        summarized[key] = parsed_state[key]
+
+                return json.dumps(summarized)
+
+        # Fallback: return as-is
+        return state_str
+
     def handle_message(self, user_message: str) -> str:
         self.messages.append({"role": "user", "content": user_message.strip()})
 
@@ -36,9 +90,12 @@ class CADAgent:
         except Exception:
             state_json = "[]"
 
-        # 3. Inject state into LLM context so it knows what exists
+        # 3. Summarize state to prevent context exhaustion
+        summarized_state = self._summarize_state(state_json)
+
+        # 4. Inject summarized state into LLM context so it knows what exists
         self.messages.append(
-            {"role": "system", "content": f"CURRENT CAD STATE: {state_json}"}
+            {"role": "system", "content": f"CURRENT CAD STATE: {summarized_state}"}
         )
 
         # 4. Retry loop for self-correction
