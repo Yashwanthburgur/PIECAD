@@ -34,7 +34,7 @@ class RequestWorker(QtCore.QThread):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=30) as response:
+            with urllib.request.urlopen(req, timeout=120.0) as response:
                 res_data = json.loads(response.read().decode("utf-8"))
                 self.response_received.emit(res_data.get("reply", "No reply."))
         except urllib.error.URLError as e:

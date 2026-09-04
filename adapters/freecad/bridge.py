@@ -209,30 +209,19 @@ def _impl_get_state():
     return json.dumps(objects_state)
 
 
-def _impl_translate(object_name, x, y, z):
-    """Translate an object by (x, y, z) coordinates.
+def _impl_delete_object(object_name):
+    """Delete an object from the active document.
 
     Runs on the main thread via the QTimer queue system.
-    Preserves existing rotation when setting new position.
+    Returns success or error string.
     """
     doc = _active_doc()
     obj = doc.getObject(object_name)
     if obj is None:
         return f"Error: Object '{object_name}' not found in active document."
-
-    # Capture current rotation to preserve it
-    current_rot = obj.Placement.Rotation if hasattr(
-        obj.Placement, 'Rotation') else App.Rotation()
-
-    # Create new position vector
-    new_pos = App.Vector(float(x), float(y), float(z))
-
-    # Overwrite entire placement preserving rotation
-    obj.Placement = App.Placement(new_pos, current_rot)
-
-    # Sync and return success
+    doc.removeObject(object_name)
     doc.recompute()
-    return f"Successfully translated '{object_name}' to ({float(x)}, {float(y)}, {float(z)})"
+    return f"Successfully deleted '{object_name}'."
 
 
 _IMPLEMENTATIONS = {
@@ -242,7 +231,7 @@ _IMPLEMENTATIONS = {
     "fillet_edges": _impl_fillet_edges,
     "set_param": _impl_set_param,
     "get_state": _impl_get_state,
-    "translate": _impl_translate,
+    "delete_object": _impl_delete_object,
 }
 
 
@@ -338,8 +327,8 @@ def get_state():
     return _execute_on_main_thread("get_state")
 
 
-def translate(object_name, x, y, z):
-    return _execute_on_main_thread("translate", object_name, x, y, z)
+def delete_object(object_name):
+    return _execute_on_main_thread("delete_object", object_name)
 
 
 _HANDLERS = {
@@ -349,7 +338,7 @@ _HANDLERS = {
     "fillet_edges": fillet_edges,
     "set_param": set_param,
     "get_state": get_state,
-    "translate": translate,
+    "delete_object": delete_object,
 }
 
 

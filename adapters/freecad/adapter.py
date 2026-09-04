@@ -34,7 +34,7 @@ class FreeCADAdapter(CADAdapter):
     # CADAdapter.get_tools() -> WHAT the agent may request.
     # ------------------------------------------------------------------ #
     def get_tools(self) -> List[Dict[str, Any]]:
-        """Return OpenAI-compatible function schemas for the 6 core operations."""
+        """Return OpenAI-compatible function schemas for the 7 core operations."""
         return [
             {
                 "type": "function",
@@ -133,6 +133,20 @@ class FreeCADAdapter(CADAdapter):
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "delete_object",
+                    "description": "Deletes an object from the CAD document. Use this when the user asks to undo, remove, or delete geometry.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "object_name": _str_schema("Name of the object to delete."),
+                        },
+                        "required": ["object_name"],
+                    },
+                },
+            },
         ]
 
     # ------------------------------------------------------------------ #
@@ -198,6 +212,13 @@ class FreeCADAdapter(CADAdapter):
                         float(parameters["x"]),
                         float(parameters["y"]),
                         float(parameters["z"]),
+                    )
+                )
+
+            if tool_name == "delete_object":
+                return str(
+                    self._proxy.delete_object(
+                        str(parameters["object_name"]),
                     )
                 )
 
