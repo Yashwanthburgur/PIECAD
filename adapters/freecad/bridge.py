@@ -252,19 +252,40 @@ def _impl_get_state():
     return json.dumps(objects_state)
 
 
-def _impl_delete_object(object_name):
+def _impl_delete_object(target_feature_id: str):
     """Delete an object from the active document.
 
-    Runs on the main thread via the QTimer queue system.
-    Returns success or error string.
+    Un-hides consumed features (Base, Tool, Shapes) before removing the parent
+    feature so they reappear in the UI.
     """
     doc = _active_doc()
-    obj = doc.getObject(object_name)
-    if obj is None:
-        return f"Error: Object '{object_name}' not found in active document."
-    doc.removeObject(object_name)
-    doc.recompute()
-    return f"Successfully deleted '{object_name}'."
+    obj = doc.getObject(target_feature_id)
+
+    if not obj:
+        return f"Error: Object '{target_feature_id}' not found in active document."
+
+    # Un-hide consumed features so they don't vanish from the UI
+    if hasattr(obj, "Base") and obj.Base:
+        try:
+            obj.Base.ViewObject.Visibility = True
+        except Exception:
+            pass
+    if hasattr(obj, "Tool") and obj.Tool:
+        try:
+            obj.Tool.ViewObject.Visibility = True
+        except Exception:
+            pass
+    if hasattr(obj, "Shapes") and obj.Shapes:
+        for shape in obj.Shapes:
+            try:
+                shape.ViewObject.Visibility = True
+            except Exception:
+                pass
+
+    # Now safely remove the feature
+    doc.removeObject(target_feature_id)
+    _sync(doc)
+    return f"Successfully deleted '{target_feature_id}'."
 
 
 def _impl_translate(object_name: str, x: float, y: float, z: float):
