@@ -32,7 +32,8 @@ class CADAgent:
     def __init__(self, adapter: CADAdapter, provider: Optional[LLMProvider] = None):
         self.adapter = adapter
         self.provider = provider or LLMProvider()
-        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        # Long-term conversation history: ONLY user prompts and final agent responses
+        self.history = []
 
     def _summarize_state(self, state_str: str, max_items: int = 10) -> str:
         """Summarize CAD state to prevent context exhaustion on large assemblies.
@@ -90,7 +91,17 @@ class CADAgent:
         return state_str
 
     def handle_message(self, user_message: str) -> str:
-        self.messages.append({"role": "user", "content": user_message.strip()})
+        """Process a user message using a ReAct scratchpad pattern.
+
+        Long-term memory (self.history): Stores ONLY user prompts and final agent responses.
+        Short-term scratchpad (local variable): Stores ReAct loop internals (tool calls, results).
+        The scratchpad is discarded after each handle_message call, keeping history clean.
+        """
+        # Append user message to long-term history
+        self.history.append({"role": "user", "content": user_message.strip()})
+
+        # Short-term scratchpad for this ReAct loop execution
+        scratchpad = []
 
         # Multi-step ReAct loop: max 10 steps to prevent infinite looping
         for step in range(self.MAX_STEPS):
@@ -110,20 +121,18 @@ class CADAgent:
             # 3. Summarize state to prevent context exhaustion (Context Guard)
             summarized_state = self._summarize_state(state_json)
 
-            # 4. Inject summarized state into LLM context so it knows what exists
-            self.messages.append(
-                {"role": "system", "content": f"CURRENT CAD STATE: {summarized_state}"}
-            )
+            # 4. Build dynamic system prompt with current state + ReAct discipline
+            dynamic_system = SYSTEM_PROMPT + \
+                f"\n\nCURRENT CAD STATE:\n{summarized_state}\n\n{REACT_LOOP_INJECTION}"
 
-            # 5. CRITICAL: Inject ReAct loop discipline at EVERY step
-            self.messages.append(
-                {"role": "system", "content": REACT_LOOP_INJECTION}
-            )
+            # 5. Build messages: [system] + history + scratchpad
+            messages = [{"role": "system", "content": dynamic_system}
+                        ] + self.history + scratchpad
 
             # 6. Get intent from LLM
             print(f"[Agent] Calling LLM with {len(tools)} tools available...")
             response = self.provider.generate_with_tools(
-                messages=self.messages, tools=tools
+                messages=messages, tools=tools
             )
 
             # 7. If LLM returns plain text (NO tool calls): agent is done
@@ -131,10 +140,18 @@ class CADAgent:
                 reply = response.content or "Done."
                 print(
                     f"[Agent] Finished reasoning (no tool calls). Final response: {reply}")
-                self.messages.append({"role": "assistant", "content": reply})
+                # Append final response to long-term history
+                self.history.append({"role": "assistant", "content": reply})
                 return reply
 
-            # 8. Execute tool calls through the adapter
+            # 8. LLM returned tool calls - append assistant message to scratchpad
+            scratchpad.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": response.tool_calls
+            })
+
+            # 9. Execute tool calls through the adapter
             results = []
 
             for tc in response.tool_calls:
@@ -153,17 +170,21 @@ class CADAgent:
                     print(
                         f"\033[91m[ERROR] Step {step+1}: Tool '{name}' failed: {e}\033[0m")
 
-            # 9. Append tool execution results (success or error) to message history
-            # The LLM will read these in the next iteration and decide its next move
-            summary = "\n".join(results)
-            self.messages.append({"role": "assistant", "content": summary})
+            # 10. Append tool results to scratchpad as tool messages
+            for i, tc in enumerate(response.tool_calls):
+                scratchpad.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": results[i]
+                })
 
-            # 10. Loop repeats - do NOT return to user yet
+            # 11. Loop repeats - do NOT return to user yet
             print(
                 f"[Agent] Step {step+1} complete. Continuing to next step...")
 
         # Max steps reached
         fail_msg = f"Operation incomplete: maximum reasoning steps ({self.MAX_STEPS}) reached."
         print(f"\033[91m[ERROR] {fail_msg}\033[0m")
-        self.messages.append({"role": "assistant", "content": fail_msg})
+        # Append failure message to long-term history
+        self.history.append({"role": "assistant", "content": fail_msg})
         return fail_msg
