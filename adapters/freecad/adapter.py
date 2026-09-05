@@ -73,6 +73,16 @@ class FreeCADAdapter(CADAdapter):
         corresponding method on the bridge proxy. The bridge returns a
         human-readable confirmation string which is passed back to the agent.
         """
+        # Sanitize tool name (e.g., 'cylinder.op' -> 'cylinder')
+        tool_name = tool_name.split('.')[0]
+
+        # Sanitize kwargs (e.g., {'cylinder.radius': 15} -> {'radius': 15})
+        clean_kwargs = {}
+        for k, v in kwargs.items():
+            clean_key = k.split('.')[-1]
+            clean_kwargs[clean_key] = v
+        kwargs = clean_kwargs
+
         try:
             if tool_name == "box":
                 # Extract parameters from IR kwargs (required fields guaranteed by schema)

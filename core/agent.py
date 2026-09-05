@@ -4,20 +4,30 @@ from typing import Optional
 from providers.llm.provider import LLMProvider
 from core.adapters.interfaces import CADAdapter
 
-SYSTEM_PROMPT = """You are PieCAD, a production-grade mechanical engineering AI agent. 
-You control a live FreeCAD document via tool calls. 
+# Base system prompt - defines the agent's role and critical rules
+SYSTEM_PROMPT = """You are PieCAD, a production-grade mechanical engineering AI agent.
+You control a live FreeCAD document via tool calls.
 
 CRITICAL RULES:
 1. STATE AWARENESS: You will be provided with the CURRENT CAD STATE. Never guess object names. Always reference exact names and dimensions from the state.
-2. NO SPAMMING: Never create duplicate base geometry (e.g., Box001, Box002) to fix a mistake. If a user asks you to fix or "undo" something, use the `delete_object` tool or use `set_param` to modify the existing object.
+2. NO SPAMMING: Never create duplicate base geometry (e.g., Box001, Box002) to fix a mistake. If a user asks you to fix or "undo" something, use the `delete_feature` tool or use `set_param` to modify the existing object.
 3. FIXING ERRORS: If a user gives you a physically impossible command (e.g., Fillet radius 50 on a 20mm box) and tells you to "fix it" or "do what is suitable", you must apply the correct modification to the EXISTING object (e.g., execute a fillet with a 5mm radius on the original box). Do NOT spawn a new box.
-4. UNDO REQUESTS: If the user says "undo", look at the most recent object in the state and use `delete_object` to remove it.
+4. UNDO REQUESTS: If the user says "undo", look at the most recent object in the state and use `delete_feature` to remove it.
 5. CONCISENESS: Do not output long conversational apologies. Just execute the tool calls to fix the geometry.
+"""
+
+# Per-step injection to force ReAct loop discipline
+REACT_LOOP_INJECTION = """You are in a multi-step ReAct loop. DO NOT output conversational text until you have completed ALL steps of the user's request.
+- You MUST call tools to make progress.
+- If you just executed a tool, evaluate the NEW state and immediately call the NEXT tool.
+- Only respond with plain text (no tool calls) when the ENTIRE user request is satisfied.
+- NEVER delete objects you just created unless the user explicitly asked to undo.
 """
 
 
 class CADAgent:
     MAX_RETRIES = 3
+    MAX_STEPS = 10
 
     def __init__(self, adapter: CADAdapter, provider: Optional[LLMProvider] = None):
         self.adapter = adapter
@@ -29,6 +39,7 @@ class CADAgent:
 
         Handles both JSON dict (property-based) and JSON list (object-based) states.
         For lists, keeps only the most recently added max_items objects.
+        Always ensures object names/IDs are clearly visible.
         """
         # Try to parse state_str as JSON
         try:
@@ -82,18 +93,18 @@ class CADAgent:
         self.messages.append({"role": "user", "content": user_message.strip()})
 
         # Multi-step ReAct loop: max 10 steps to prevent infinite looping
-        for step in range(10):
-            print(f"\n--- [ReAct Step {step+1}/10] ---")
+        for step in range(self.MAX_STEPS):
+            print(f"\n=== [ReAct Step {step+1}/{self.MAX_STEPS}] ===")
 
             # 1. Ask adapter for its active tools
             tools = self.adapter.get_tools()
-            print(
-                f"[Agent] Analyzing current CAD state... ({len(tools)} tools available)")
+            print(f"[Agent] Step {step+1}: {len(tools)} tools available")
 
             # 2. Get current CAD state
             try:
                 state_json = self.adapter.get_state()
-            except Exception:
+            except Exception as e:
+                print(f"[Agent] Warning: Failed to get state: {e}")
                 state_json = "[]"
 
             # 3. Summarize state to prevent context exhaustion (Context Guard)
@@ -104,45 +115,55 @@ class CADAgent:
                 {"role": "system", "content": f"CURRENT CAD STATE: {summarized_state}"}
             )
 
-            # 5. Get intent from LLM
+            # 5. CRITICAL: Inject ReAct loop discipline at EVERY step
+            self.messages.append(
+                {"role": "system", "content": REACT_LOOP_INJECTION}
+            )
+
+            # 6. Get intent from LLM
             print(f"[Agent] Calling LLM with {len(tools)} tools available...")
             response = self.provider.generate_with_tools(
                 messages=self.messages, tools=tools
             )
 
-            # 6. If LLM returns plain text (NO tool calls): agent is done
+            # 7. If LLM returns plain text (NO tool calls): agent is done
             if not getattr(response, "tool_calls", None):
                 reply = response.content or "Done."
-                print(f"[Agent] Finished reasoning. Final response: {reply}")
+                print(
+                    f"[Agent] Finished reasoning (no tool calls). Final response: {reply}")
                 self.messages.append({"role": "assistant", "content": reply})
                 return reply
 
-            # 7. Execute tool calls through the adapter
+            # 8. Execute tool calls through the adapter
             results = []
 
             for tc in response.tool_calls:
                 name = tc.function.name
                 args = json.loads(tc.function.arguments)
                 print(
-                    f"[Execution] Agent decided to use tool: {name} with args: {args}")
+                    f"[Execution] Step {step+1}: Tool '{name}' with args: {args}")
                 try:
-                    out = self.adapter.execute_command(name, args)
+                    out = self.adapter.execute_command(name, **args)
                     results.append(out)
-                    print(f"[Execution] Tool '{name}' succeeded: {out}")
+                    print(
+                        f"[Execution] Step {step+1}: Tool '{name}' succeeded: {out}")
                 except Exception as e:
                     error_msg = f"Execution error on {name}: {e}"
                     results.append(error_msg)
-                    print(f"\033[91m[ERROR] Tool '{name}' failed: {e}\033[0m")
+                    print(
+                        f"\033[91m[ERROR] Step {step+1}: Tool '{name}' failed: {e}\033[0m")
 
-            # 8. Append tool execution results (success or error) to message history
+            # 9. Append tool execution results (success or error) to message history
             # The LLM will read these in the next iteration and decide its next move
             summary = "\n".join(results)
             self.messages.append({"role": "assistant", "content": summary})
 
-            # 9. Loop repeats - do NOT return to user yet
+            # 10. Loop repeats - do NOT return to user yet
+            print(
+                f"[Agent] Step {step+1} complete. Continuing to next step...")
 
         # Max steps reached
-        fail_msg = "Operation incomplete: maximum reasoning steps (10) reached."
+        fail_msg = f"Operation incomplete: maximum reasoning steps ({self.MAX_STEPS}) reached."
         print(f"\033[91m[ERROR] {fail_msg}\033[0m")
         self.messages.append({"role": "assistant", "content": fail_msg})
         return fail_msg
