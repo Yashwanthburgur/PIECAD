@@ -31,6 +31,19 @@ class DeleteFeature(OpBase):
     target_feature_id: str
 
 
+# --- Tier 1 (Core Solid Modeling) ---
+class Hole(OpBase):
+    op: Literal["hole"] = "hole"
+    face_ref: FaceRef
+    x: float
+    y: float
+    diameter: float = Field(gt=0)
+    depth: Optional[float] = Field(
+        default=None, description="None = through-all")
+    kind: Literal["simple", "counterbore", "countersink", "tapped"] = "simple"
+    thread_spec: Optional[str] = Field(default=None, description="e.g. 'M6x1'")
+
+
 # --- Tier 2 (Primitives with Built-in Translation) ---
 class Box(OpBase):
     op: Literal["box"] = "box"

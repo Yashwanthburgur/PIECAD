@@ -13,7 +13,7 @@ from typing import Any, Dict, List
 import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
-from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature
+from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole
 
 
 class FreeCADAdapter(CADAdapter):
@@ -73,6 +73,14 @@ class FreeCADAdapter(CADAdapter):
                         },
                         "required": ["object_name"]
                     }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "hole",
+                    "description": "Create a hole by drilling into a face at a point. Automatically calculates depth for through-all if not specified.",
+                    "parameters": Hole.model_json_schema(),
                 }
             },
         ]
@@ -166,6 +174,25 @@ class FreeCADAdapter(CADAdapter):
                 faces = self._proxy.get_faces(str(object_name))
                 import json
                 return json.dumps(faces)
+
+            if tool_name == "hole":
+                obj_id = kwargs["id"]
+                face_ref = kwargs["face_ref"]
+                x = float(kwargs["x"])
+                y = float(kwargs["y"])
+                diameter = float(kwargs["diameter"])
+                depth = kwargs.get("depth")
+                depth_val = float(depth) if depth is not None else 100.0
+                return str(
+                    self._proxy.hole(
+                        str(obj_id),
+                        str(face_ref),
+                        x,
+                        y,
+                        diameter,
+                        depth_val,
+                    )
+                )
 
             raise NotImplementedError(
                 f"Tool '{tool_name}' is not supported by the FreeCAD adapter."

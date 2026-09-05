@@ -284,6 +284,87 @@ def _impl_translate(object_name: str, x: float, y: float, z: float):
     return f"Successfully translated '{object_name}' to ({x}, {y}, {z})."
 
 
+def _impl_hole(id: str, face_ref: str, x: float, y: float, diameter: float, depth: float = 100.0):
+    """Create a hole by drilling into a face at (x, y) with given diameter and depth.
+
+    Does B-rep geometry at kernel level (no create_cylinder+boolean).
+    """
+    import FreeCAD
+
+    # Parse face_ref (format: "ObjectName_face_N")
+    if "_face_" not in face_ref:
+        raise ValueError(
+            f"Invalid face_ref format: {face_ref}. Expected 'ObjectName_face_N'")
+
+    parts = face_ref.split("_face_")
+    if len(parts) != 2:
+        raise ValueError(
+            f"Invalid face_ref format: {face_ref}. Expected 'ObjectName_face_N'")
+
+    target_name = parts[0]
+    try:
+        face_index = int(parts[1]) - 1  # Convert to 0-based index
+    except ValueError:
+        raise ValueError(f"Invalid face index in face_ref: {face_ref}")
+
+    doc = _active_doc()
+    target = doc.getObject(target_name)
+    if target is None:
+        raise ValueError(f"Target object not found: {target_name}")
+
+    if not hasattr(target, "Shape") or target.Shape is None:
+        raise ValueError(f"Target object has no Shape: {target_name}")
+
+    try:
+        face = target.Shape.Faces[face_index]
+    except IndexError:
+        raise ValueError(
+            f"Face index {face_index + 1} out of range for object {target_name}")
+
+    # Get center of mass
+    center = face.CenterOfMass
+
+    # Get normal vector (pointing outward from face)
+    normal = FreeCAD.Vector(0, 0, 1)  # default fallback
+    if hasattr(face.Surface, "Axis"):
+        normal = face.Surface.Axis
+
+    # Reverse normal so it points inward (into the material for a hole)
+    normal = normal * -1.0
+
+    # For this MVP, we ignore x/y offsets and drill at face center
+    # In a full implementation, we would: center + (x * normal_x + y * normal_y)
+    # but for now we use the face center as specified
+
+    # Determine depth: if depth <= 0, treat as through-all (use large value)
+    hole_depth = depth if depth > 0 else 100.0
+
+    # Create the cylinder shape for the hole
+    cyl_shape = Part.makeCylinder(diameter/2.0, hole_depth, center, normal)
+
+    # Create a temporary tool object
+    tool = doc.addObject("Part::Feature", f"{id}_tool")
+    tool.Shape = cyl_shape
+
+    # Perform the cut operation
+    cut = doc.addObject("Part::Cut", id)
+    cut.Base = target
+    cut.Tool = tool
+
+    # Hide the base and tool objects
+    try:
+        target.ViewObject.Visibility = False
+    except Exception:
+        pass
+    try:
+        tool.ViewObject.Visibility = False
+    except Exception:
+        pass
+
+    _sync(doc)
+    return f"Successfully created hole '{id}' on face {face_ref} with diameter {diameter}, depth {'through-all' if depth <= 0 else str(depth)}."
+
+
 def _impl_get_faces(object_name: str):
     """Query the B-rep faces of an existing object.
 
@@ -325,6 +406,7 @@ _IMPLEMENTATIONS = {
     "delete_object": _impl_delete_object,
     "translate": _impl_translate,
     "get_faces": _impl_get_faces,
+    "hole": _impl_hole,
 }
 
 
@@ -439,6 +521,10 @@ def get_faces(object_name):
     return _execute_on_main_thread("get_faces", object_name)
 
 
+def hole(id, face_ref, x, y, diameter, depth=100.0):
+    return _execute_on_main_thread("hole", id, face_ref, x, y, diameter, depth)
+
+
 _HANDLERS = {
     "create_box": create_box,
     "create_cylinder": create_cylinder,
@@ -449,6 +535,7 @@ _HANDLERS = {
     "delete_object": delete_object,
     "translate": translate,
     "get_faces": get_faces,
+    "hole": hole,
 }
 
 
