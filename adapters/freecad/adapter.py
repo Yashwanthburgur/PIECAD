@@ -61,6 +61,20 @@ class FreeCADAdapter(CADAdapter):
                     "parameters": DeleteFeature.model_json_schema(),
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_faces",
+                    "description": "Query the B-rep faces of an existing object to use as references for sketches or holes. Returns face IDs, areas, and center of mass coordinates.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "object_name": {"type": "string", "description": "The ID of the object to query"}
+                        },
+                        "required": ["object_name"]
+                    }
+                }
+            },
         ]
 
     # ------------------------------------------------------------------ #
@@ -146,6 +160,12 @@ class FreeCADAdapter(CADAdapter):
                 return str(
                     self._proxy.delete_object(str(target_feature_id))
                 )
+
+            if tool_name == "get_faces":
+                object_name = kwargs["object_name"]
+                faces = self._proxy.get_faces(str(object_name))
+                import json
+                return json.dumps(faces)
 
             raise NotImplementedError(
                 f"Tool '{tool_name}' is not supported by the FreeCAD adapter."

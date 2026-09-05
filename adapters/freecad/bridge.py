@@ -284,6 +284,37 @@ def _impl_translate(object_name: str, x: float, y: float, z: float):
     return f"Successfully translated '{object_name}' to ({x}, {y}, {z})."
 
 
+def _impl_get_faces(object_name: str):
+    """Query the B-rep faces of an existing object.
+
+    Returns a list of face dicts with:
+    - face_index (1-based index)
+    - center (CenterOfMass as dict with x, y, z)
+    - area (float)
+    - face_id (opaque pointer string)
+    """
+    doc = _active_doc()
+    obj = doc.getObject(object_name)
+    if obj is None:
+        raise ValueError(f"Object not found: {object_name}")
+
+    if not hasattr(obj, "Shape") or obj.Shape is None:
+        return []
+
+    faces = []
+    for face_index, face in enumerate(obj.Shape.Faces, start=1):
+        center = face.CenterOfMass
+        face_dict = {
+            "face_index": face_index,
+            "center": {"x": center.x, "y": center.y, "z": center.z},
+            "area": face.Area,
+            "face_id": f"{object_name}_face_{face_index}",
+        }
+        faces.append(face_dict)
+
+    return faces
+
+
 _IMPLEMENTATIONS = {
     "create_box": _impl_create_box,
     "create_cylinder": _impl_create_cylinder,
@@ -293,6 +324,7 @@ _IMPLEMENTATIONS = {
     "get_state": _impl_get_state,
     "delete_object": _impl_delete_object,
     "translate": _impl_translate,
+    "get_faces": _impl_get_faces,
 }
 
 
@@ -403,6 +435,10 @@ def translate(object_name, x, y, z):
     return _execute_on_main_thread("translate", object_name, x, y, z)
 
 
+def get_faces(object_name):
+    return _execute_on_main_thread("get_faces", object_name)
+
+
 _HANDLERS = {
     "create_box": create_box,
     "create_cylinder": create_cylinder,
@@ -412,6 +448,7 @@ _HANDLERS = {
     "get_state": get_state,
     "delete_object": delete_object,
     "translate": translate,
+    "get_faces": get_faces,
 }
 
 
