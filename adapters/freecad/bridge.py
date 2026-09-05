@@ -417,6 +417,24 @@ def _impl_get_faces(object_name: str):
     return faces
 
 
+def _impl_export_glb(filepath: str):
+    """Export visible objects to a GLB file using FreeCAD's GLTF exporter."""
+    doc = _active_doc()
+
+    # Filter for visible objects only (skip hidden tools/base objects)
+    visible_objs = [
+        obj for obj in doc.Objects
+        if hasattr(obj, "ViewObject") and obj.ViewObject and obj.ViewObject.Visibility
+    ]
+
+    if not visible_objs:
+        return "Error: No visible objects to export."
+
+    import importGLTF
+    importGLTF.export(visible_objs, filepath)
+    return "Exported successfully."
+
+
 _IMPLEMENTATIONS = {
     "create_box": _impl_create_box,
     "create_cylinder": _impl_create_cylinder,
@@ -428,6 +446,7 @@ _IMPLEMENTATIONS = {
     "translate": _impl_translate,
     "get_faces": _impl_get_faces,
     "hole": _impl_hole,
+    "export_glb": _impl_export_glb,
 }
 
 
@@ -546,6 +565,10 @@ def hole(id, face_ref, x, y, diameter, depth=100.0):
     return _execute_on_main_thread("hole", id, face_ref, x, y, diameter, depth)
 
 
+def export_glb(filepath):
+    return _execute_on_main_thread("export_glb", filepath)
+
+
 _HANDLERS = {
     "create_box": create_box,
     "create_cylinder": create_cylinder,
@@ -557,6 +580,7 @@ _HANDLERS = {
     "translate": translate,
     "get_faces": get_faces,
     "hole": hole,
+    "export_glb": export_glb,
 }
 
 

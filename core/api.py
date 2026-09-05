@@ -1,6 +1,7 @@
 """FastAPI Gateway."""
 from fastapi import FastAPI
 from pydantic import BaseModel
+from fastapi.responses import FileResponse
 import uvicorn
 from core.agent import CADAgent
 from core.adapters.interfaces import CADAdapter
@@ -35,6 +36,24 @@ class ChatResponse(BaseModel):
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     return ChatResponse(reply=agent.handle_message(request.message))
+
+
+@app.get("/api/state/glb")
+async def get_model_glb():
+    filepath = os.path.abspath("current_state.glb")
+    try:
+        # Trigger the adapter to export the file to the local disk
+        # Use the existing agent instance's adapter
+        agent.adapter.export_glb(filepath)
+
+        # Check if file was actually created
+        if not os.path.exists(filepath):
+            return {"error": "GLB file was not generated."}
+
+        return FileResponse(filepath, media_type="model/gltf-binary", filename="piecad_state.glb")
+    except Exception as e:
+        return {"error": f"Export failed: {str(e)}"}
+
 
 if __name__ == "__main__":
     uvicorn.run("core.api:app", host="127.0.0.1", port=8000, reload=True)

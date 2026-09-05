@@ -234,3 +234,10 @@ class FreeCADAdapter(CADAdapter):
             return "[]"
         except Exception:
             return "[]"
+
+    # ------------------------------------------------------------------ #
+    # Backend API methods (not LLM tools)
+    # ------------------------------------------------------------------ #
+    def export_glb(self, filepath: str) -> str:
+        """Exports the current visible CAD state to a .glb file."""
+        return str(self._proxy.export_glb(filepath))
