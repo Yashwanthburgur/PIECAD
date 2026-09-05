@@ -81,76 +81,68 @@ class CADAgent:
     def handle_message(self, user_message: str) -> str:
         self.messages.append({"role": "user", "content": user_message.strip()})
 
-        # 1. Ask adapter for its active tools
-        tools = self.adapter.get_tools()
+        # Multi-step ReAct loop: max 10 steps to prevent infinite looping
+        for step in range(10):
+            print(f"\n--- [ReAct Step {step+1}/10] ---")
 
-        # 2. Get current CAD state
-        try:
-            state_json = self.adapter.get_state()
-        except Exception:
-            state_json = "[]"
+            # 1. Ask adapter for its active tools
+            tools = self.adapter.get_tools()
+            print(
+                f"[Agent] Analyzing current CAD state... ({len(tools)} tools available)")
 
-        # 3. Summarize state to prevent context exhaustion
-        summarized_state = self._summarize_state(state_json)
+            # 2. Get current CAD state
+            try:
+                state_json = self.adapter.get_state()
+            except Exception:
+                state_json = "[]"
 
-        # 4. Inject summarized state into LLM context so it knows what exists
-        self.messages.append(
-            {"role": "system", "content": f"CURRENT CAD STATE: {summarized_state}"}
-        )
+            # 3. Summarize state to prevent context exhaustion (Context Guard)
+            summarized_state = self._summarize_state(state_json)
 
-        # 4. Retry loop for self-correction
-        for attempt in range(self.MAX_RETRIES):
-            # Get intent from LLM
+            # 4. Inject summarized state into LLM context so it knows what exists
+            self.messages.append(
+                {"role": "system", "content": f"CURRENT CAD STATE: {summarized_state}"}
+            )
+
+            # 5. Get intent from LLM
+            print(f"[Agent] Calling LLM with {len(tools)} tools available...")
             response = self.provider.generate_with_tools(
-                messages=self.messages, tools=tools)
+                messages=self.messages, tools=tools
+            )
 
+            # 6. If LLM returns plain text (NO tool calls): agent is done
             if not getattr(response, "tool_calls", None):
                 reply = response.content or "Done."
+                print(f"[Agent] Finished reasoning. Final response: {reply}")
                 self.messages.append({"role": "assistant", "content": reply})
                 return reply
 
-            # Execute tool calls through the adapter
+            # 7. Execute tool calls through the adapter
             results = []
-            execution_failed = False
-            last_error = ""
 
             for tc in response.tool_calls:
                 name = tc.function.name
                 args = json.loads(tc.function.arguments)
+                print(
+                    f"[Execution] Agent decided to use tool: {name} with args: {args}")
                 try:
                     out = self.adapter.execute_command(name, args)
                     results.append(out)
+                    print(f"[Execution] Tool '{name}' succeeded: {out}")
                 except Exception as e:
-                    results.append(f"Execution error on {name}: {e}")
-                    execution_failed = True
-                    last_error = str(e)
+                    error_msg = f"Execution error on {name}: {e}"
+                    results.append(error_msg)
+                    print(f"\033[91m[ERROR] Tool '{name}' failed: {e}\033[0m")
 
-            # Check if any result contains "Error" or "Failed"
-            has_error_in_result = any(
-                "Error" in r or "Failed" in r for r in results
-            )
-
-            if execution_failed or has_error_in_result:
-                # Inject surgical error message for the LLM to self-correct
-                error_summary = last_error or "Unknown error in tool execution"
-                self.messages.append(
-                    {
-                        "role": "system",
-                        "content": f"Attempt {attempt+1} failed on tool execution. Error: {error_summary}. Adjust parameters and regenerate.",
-                    }
-                )
-                # Continue the outer loop to re-trigger the LLM
-                continue
-
-            # All tools executed successfully
+            # 8. Append tool execution results (success or error) to message history
+            # The LLM will read these in the next iteration and decide its next move
             summary = "\n".join(results)
             self.messages.append({"role": "assistant", "content": summary})
-            return summary
 
-        # Loop exhausted all retries
-        fail_msg = (
-            f"Operation failed after {self.MAX_RETRIES} attempts. "
-            f"Last error: {last_error}"
-        )
+            # 9. Loop repeats - do NOT return to user yet
+
+        # Max steps reached
+        fail_msg = "Operation incomplete: maximum reasoning steps (10) reached."
+        print(f"\033[91m[ERROR] {fail_msg}\033[0m")
         self.messages.append({"role": "assistant", "content": fail_msg})
         return fail_msg

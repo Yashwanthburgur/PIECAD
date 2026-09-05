@@ -13,14 +13,7 @@ from typing import Any, Dict, List
 import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
-
-
-def _num_schema(description: str) -> Dict[str, Any]:
-    return {"type": "number", "description": description}
-
-
-def _str_schema(description: str) -> Dict[str, Any]:
-    return {"type": "string", "description": description}
+from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature
 
 
 class FreeCADAdapter(CADAdapter):
@@ -34,39 +27,22 @@ class FreeCADAdapter(CADAdapter):
     # CADAdapter.get_tools() -> WHAT the agent may request.
     # ------------------------------------------------------------------ #
     def get_tools(self) -> List[Dict[str, Any]]:
-        """Return OpenAI-compatible function schemas for the 8 core operations."""
+        """Return OpenAI-compatible function schemas for the 4 core operations."""
         return [
             {
                 "type": "function",
                 "function": {
-                    "name": "create_box",
-                    "description": "Create a 3D box solid. Dimensions are in millimeters.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "length": _num_schema("Length along X in mm."),
-                            "width": _num_schema("Width along Y in mm."),
-                            "height": _num_schema("Height along Z in mm."),
-                            "object_name": _str_schema("Name for the new box object. Default 'Box'."),
-                        },
-                        "required": ["length", "width", "height"],
-                    },
+                    "name": "box",
+                    "description": "Create a rectangular box solid. Dimensions are in millimeters.",
+                    "parameters": Box.model_json_schema(),
                 },
             },
             {
                 "type": "function",
                 "function": {
-                    "name": "create_cylinder",
-                    "description": "Create a 3D cylinder solid. Dimensions are in millimeters.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "radius": _num_schema("Cylinder radius in mm."),
-                            "height": _num_schema("Cylinder height in mm."),
-                            "object_name": _str_schema("Name for the new cylinder object. Default 'Cylinder'."),
-                        },
-                        "required": ["radius", "height"],
-                    },
+                    "name": "cylinder",
+                    "description": "Create a cylindrical solid. Dimensions are in millimeters.",
+                    "parameters": Cylinder.model_json_schema(),
                 },
             },
             {
@@ -74,82 +50,15 @@ class FreeCADAdapter(CADAdapter):
                 "function": {
                     "name": "boolean",
                     "description": "Perform a boolean operation between two existing objects. Use 'subtract' to drill holes or remove material (Base minus Tool). Use 'union' to join them. Use 'intersect' to keep only the common volume.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "operation": {
-                                "type": "string",
-                                "enum": ["subtract", "union", "intersect"],
-                                "description": "The boolean operation to perform.",
-                            },
-                            "base_obj_name": _str_schema("Name of the base solid object."),
-                            "tool_obj_name": _str_schema("Name of the tool solid object."),
-                            "result_name": _str_schema("Name for the resulting object. Default 'Cut'."),
-                        },
-                        "required": ["operation", "base_obj_name", "tool_obj_name"],
-                    },
+                    "parameters": Boolean.model_json_schema(),
                 },
             },
             {
                 "type": "function",
                 "function": {
-                    "name": "set_param",
-                    "description": "Change a single named property of an object, e.g. 'Length', 'Width', 'Height' or 'Radius'.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "object_name": _str_schema("Name of the object to modify."),
-                            "param_name": _str_schema("Property name to change (e.g. 'Length')."),
-                            "value": {"type": "number", "description": "New numeric value in mm."},
-                        },
-                        "required": ["object_name", "param_name", "value"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "fillet_edges",
-                    "description": "Apply a fillet of the given radius to all valid edges of a solid (falls back to default edges if none are specified). Radius is in millimeters.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "object_name": _str_schema("Name of the solid to fillet."),
-                            "radius": _num_schema("Fillet radius in mm."),
-                        },
-                        "required": ["object_name", "radius"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "translate",
-                    "description": "Translate an object by (x, y, z) coordinates before boolean operations.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "object_name": _str_schema("Name of the object to translate."),
-                            "x": _num_schema("Translation in mm along X axis."),
-                            "y": _num_schema("Translation in mm along Y axis."),
-                            "z": _num_schema("Translation in mm along Z axis."),
-                        },
-                        "required": ["object_name", "x", "y", "z"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "delete_object",
-                    "description": "Deletes an object from the CAD document. Use this when the user asks to undo, remove, or delete geometry.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "object_name": _str_schema("Name of the object to delete."),
-                        },
-                        "required": ["object_name"],
-                    },
+                    "name": "delete_feature",
+                    "description": "Delete an existing feature/object from the CAD document.",
+                    "parameters": DeleteFeature.model_json_schema(),
                 },
             },
         ]
@@ -157,7 +66,7 @@ class FreeCADAdapter(CADAdapter):
     # ------------------------------------------------------------------ #
     # CADAdapter.execute_command() -> HOW the request is executed.
     # ------------------------------------------------------------------ #
-    def execute_command(self, tool_name: str, parameters: Dict[str, Any]) -> str:
+    def execute_command(self, tool_name: str, **kwargs) -> str:
         """Route a structured tool call to the matching FreeCAD XML-RPC method.
 
         Each branch extracts and coerces its expected arguments, then calls the
@@ -165,67 +74,67 @@ class FreeCADAdapter(CADAdapter):
         human-readable confirmation string which is passed back to the agent.
         """
         try:
-            if tool_name == "create_box":
-                return str(
-                    self._proxy.create_box(
-                        float(parameters["length"]),
-                        float(parameters["width"]),
-                        float(parameters["height"]),
-                        str(parameters.get("object_name", "Box")),
-                    )
-                )
+            if tool_name == "box":
+                # Extract parameters from IR kwargs (required fields guaranteed by schema)
+                obj_id = kwargs["id"]
+                length = float(kwargs["length"])
+                width = float(kwargs["width"])
+                height = float(kwargs["height"])
+                origin = kwargs.get("origin", {"x": 0, "y": 0, "z": 0})
 
-            if tool_name == "create_cylinder":
-                return str(
-                    self._proxy.create_cylinder(
-                        float(parameters["radius"]),
-                        float(parameters["height"]),
-                        str(parameters.get("object_name", "Cylinder")),
-                    )
-                )
+                # Create the box
+                result = self._proxy.create_box(
+                    length, width, height, str(obj_id))
+
+                # Apply translation if origin is not (0,0,0)
+                ox = float(origin.get("x", 0))
+                oy = float(origin.get("y", 0))
+                oz = float(origin.get("z", 0))
+                if ox != 0 or oy != 0 or oz != 0:
+                    self._proxy.translate(str(obj_id), ox, oy, oz)
+
+                return str(result)
+
+            if tool_name == "cylinder":
+                # Extract parameters from IR kwargs (required fields guaranteed by schema)
+                obj_id = kwargs["id"]
+                radius = float(kwargs["radius"])
+                height = float(kwargs["height"])
+                origin = kwargs.get("origin", {"x": 0, "y": 0, "z": 0})
+
+                # Create the cylinder
+                result = self._proxy.create_cylinder(
+                    radius, height, str(obj_id))
+
+                # Apply translation if origin is not (0,0,0)
+                ox = float(origin.get("x", 0))
+                oy = float(origin.get("y", 0))
+                oz = float(origin.get("z", 0))
+                if ox != 0 or oy != 0 or oz != 0:
+                    self._proxy.translate(str(obj_id), ox, oy, oz)
+
+                return str(result)
 
             if tool_name == "boolean":
+                # Extract parameters from IR kwargs (required fields guaranteed by schema)
+                result_id = kwargs["id"]
+                mode = kwargs["mode"]
+                target_id = kwargs["target_id"]
+                tool_id = kwargs["tool_id"]
+
                 return str(
                     self._proxy.boolean(
-                        str(parameters["operation"]),
-                        str(parameters["base_obj_name"]),
-                        str(parameters["tool_obj_name"]),
-                        str(parameters.get("result_name", "Cut")),
+                        str(mode),
+                        str(target_id),
+                        str(tool_id),
+                        str(result_id),
                     )
                 )
 
-            if tool_name == "set_param":
+            if tool_name == "delete_feature":
+                target_feature_id = kwargs["target_feature_id"]
                 return str(
-                    self._proxy.set_param(
-                        str(parameters["object_name"]),
-                        str(parameters["param_name"]),
-                        float(parameters["value"]),
-                    )
-                )
-
-            if tool_name == "fillet_edges":
-                return str(
-                    self._proxy.fillet_edges(
-                        str(parameters["object_name"]),
-                        float(parameters["radius"]),
-                    )
-                )
-
-            if tool_name == "translate":
-                return str(
-                    self._proxy.translate(
-                        str(parameters["object_name"]),
-                        float(parameters["x"]),
-                        float(parameters["y"]),
-                        float(parameters["z"]),
-                    )
-                )
-
-            if tool_name == "delete_object":
-                return str(
-                    self._proxy.delete_object(
-                        str(parameters["object_name"]),
-                    )
+                    self._proxy.delete_object(str(target_feature_id))
                 )
 
             raise NotImplementedError(

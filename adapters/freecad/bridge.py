@@ -267,6 +267,23 @@ def _impl_delete_object(object_name):
     return f"Successfully deleted '{object_name}'."
 
 
+def _impl_translate(object_name: str, x: float, y: float, z: float):
+    """Translate an object to an absolute position (x, y, z).
+
+    Runs on the main thread via the QTimer queue system.
+    Returns success or error string.
+    """
+    doc = _active_doc()
+    obj = doc.getObject(object_name)
+    if obj is None:
+        raise ValueError(f"Object not found: {object_name}")
+
+    import FreeCAD
+    obj.Placement.Base = FreeCAD.Vector(float(x), float(y), float(z))
+    _sync(doc)
+    return f"Successfully translated '{object_name}' to ({x}, {y}, {z})."
+
+
 _IMPLEMENTATIONS = {
     "create_box": _impl_create_box,
     "create_cylinder": _impl_create_cylinder,
@@ -275,6 +292,7 @@ _IMPLEMENTATIONS = {
     "set_param": _impl_set_param,
     "get_state": _impl_get_state,
     "delete_object": _impl_delete_object,
+    "translate": _impl_translate,
 }
 
 
@@ -381,6 +399,10 @@ def delete_object(object_name):
     return _execute_on_main_thread("delete_object", object_name)
 
 
+def translate(object_name, x, y, z):
+    return _execute_on_main_thread("translate", object_name, x, y, z)
+
+
 _HANDLERS = {
     "create_box": create_box,
     "create_cylinder": create_cylinder,
@@ -389,6 +411,7 @@ _HANDLERS = {
     "set_param": set_param,
     "get_state": get_state,
     "delete_object": delete_object,
+    "translate": translate,
 }
 
 
