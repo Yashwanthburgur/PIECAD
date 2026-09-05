@@ -12,7 +12,7 @@ This bridge therefore uses a **two-thread design**:
    the document/object work, then signals the waiting worker.
 
 This keeps the synchronous XML-RPC contract while guaranteeing every FreeCAD
-operation (``doc.addObject``, ``doc.recompute``, ``Gui.SendMsgToActiveView``)
+operation (`doc.addObject`, `doc.recompute`, `Gui.SendMsgToActiveView`)
 runs on the main thread — so objects render immediately.
 
 Usage (paste into the FreeCAD Python console):
@@ -57,20 +57,34 @@ except ImportError:
 
 
 # --------------------------------------------------------------------------- #
-# Work queue + result plumbing (single producer: XML-RPC workers,
-# single consumer: main-thread QTimer).
+# Thread-safe queue and results storage for main-thread execution.
 # --------------------------------------------------------------------------- #
-# items: (req_id, op_name, args, kwargs)
-_WORK_QUEUE: "queue.Queue" = queue.Queue()
 
-_RESULTS = {}          # req_id -> ("ok", payload) | ("error", message)
+_WORK_QUEUE: "queue.Queue[tuple]" = queue.Queue()
+_RESULTS: "dict[str, tuple[str, str]]" = {}
+_RESULTS_EVENTS: "dict[str, threading.Event]" = {}
 _RESULTS_LOCK = threading.Lock()
-_RESULTS_EVENTS = {}   # req_id -> threading.Event
+
+
+# --------------------------------------------------------------------------- #
+# Syncer: runs recompute + ViewFit on the main thread.
+# --------------------------------------------------------------------------- #
+
+
+def _sync(doc):
+    """Sync the document after geometry changes: recompute and fit view."""
+    doc.recompute()
+    try:
+        Gui.SendMsgToActiveView("ViewFit")
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------- #
 # Actual FreeCAD implementations (runs ONLY on the main thread).
 # --------------------------------------------------------------------------- #
+
+
 def _active_doc():
     doc = App.ActiveDocument
     if doc is None:
@@ -130,26 +144,50 @@ def _impl_create_cylinder(radius, height, object_name="Cylinder"):
     return f"Successfully created Cylinder r={radius} h={height} as '{obj.Name}'."
 
 
-def _impl_boolean_cut(base_name, tool_name, result_name="Cut"):
+def _impl_boolean(operation: str, base_obj: str, tool_obj: str, result_name: str):
+    """Perform a boolean operation between two existing objects.
+
+    Supported operations:
+      - "subtract": Base minus Tool (drill hole, remove material)
+      - "union": Join both objects via Part::MultiFuse
+      - "intersect": Keep only the common volume via Part::MultiCommon
+
+    Raises ValueError if either object is not found.
+    """
     doc = _active_doc()
 
-    base = doc.getObject(base_name)
+    base = doc.getObject(base_obj)
     if base is None:
-        raise ValueError(f"Base object not found: {base_name}")
-    tool = doc.getObject(tool_name)
+        raise ValueError(f"Base object not found: {base_obj}")
+    tool = doc.getObject(tool_obj)
     if tool is None:
-        raise ValueError(f"Tool object not found: {tool_name}")
+        raise ValueError(f"Tool object not found: {tool_obj}")
 
-    cut = doc.addObject("Part::Cut", result_name)
-    cut.Base = base
-    cut.Tool = tool
+    if operation == "subtract":
+        new_obj = doc.addObject("Part::Cut", result_name)
+        new_obj.Base = base
+        new_obj.Tool = tool
+    elif operation == "union":
+        new_obj = doc.addObject("Part::MultiFuse", result_name)
+        new_obj.Shapes = [base, tool]
+    elif operation == "intersect":
+        new_obj = doc.addObject("Part::MultiCommon", result_name)
+        new_obj.Shapes = [base, tool]
+    else:
+        raise ValueError(f"Unknown boolean operation: {operation}")
 
-    _impl_set_visible(doc, base_name, False)
-    _impl_set_visible(doc, tool_name, False)
+    # Hide the original objects
+    try:
+        doc.getObject(base_obj).Visibility = False
+    except Exception:
+        pass
+    try:
+        doc.getObject(tool_obj).Visibility = False
+    except Exception:
+        pass
 
-    _finish(doc)
-    _impl_set_visible(doc, cut.Name, True)
-    return f"Successfully cut {tool_name} from {base_name} into '{cut.Name}'."
+    _sync(doc)
+    return f"Successfully performed '{operation}' on '{base_obj}' and '{tool_obj}' as '{new_obj.Name}'."
 
 
 def _impl_fillet_edges(object_name, radius):
@@ -232,7 +270,7 @@ def _impl_delete_object(object_name):
 _IMPLEMENTATIONS = {
     "create_box": _impl_create_box,
     "create_cylinder": _impl_create_cylinder,
-    "boolean_cut": _impl_boolean_cut,
+    "boolean": _impl_boolean,
     "fillet_edges": _impl_fillet_edges,
     "set_param": _impl_set_param,
     "get_state": _impl_get_state,
@@ -243,6 +281,8 @@ _IMPLEMENTATIONS = {
 # --------------------------------------------------------------------------- #
 # Main-thread executor (QTimer consumer).
 # --------------------------------------------------------------------------- #
+
+
 def _process_queue():
     """Drain pending operations. Runs on the FreeCAD main thread via QTimer."""
     while True:
@@ -251,21 +291,22 @@ def _process_queue():
         except queue.Empty:
             break
 
-        func = _IMPLEMENTATIONS.get(op_name)
-        if func is None:
+        if op_name not in _IMPLEMENTATIONS:
             status, payload = "error", f"Unknown operation: {op_name}"
         else:
             try:
-                status, payload = "ok", func(*args, **kwargs)
-            except Exception as e:  # noqa: BLE001 - surface any FreeCAD error
+                status, payload = "ok", _IMPLEMENTATIONS[op_name](
+                    *args, **kwargs)
+            except Exception as e:
                 status, payload = "error", str(e)
 
         with _RESULTS_LOCK:
             _RESULTS[req_id] = (status, payload)
             event = _RESULTS_EVENTS.get(req_id)
+            if event is not None:
+                event.set()
 
-        if event is not None:
-            event.set()
+        _WORK_QUEUE.task_done()
 
 
 _TIMER = None
@@ -285,6 +326,8 @@ def install_main_thread_processor(interval_ms=50):
 # --------------------------------------------------------------------------- #
 # Dispatcher: called on an XML-RPC worker thread, delegates to main thread.
 # --------------------------------------------------------------------------- #
+
+
 def _execute_on_main_thread(op_name, *args, **kwargs):
     req_id = uuid.uuid4().hex
     event = threading.Event()
@@ -308,6 +351,8 @@ def _execute_on_main_thread(op_name, *args, **kwargs):
 # --------------------------------------------------------------------------- #
 # XML-RPC handlers (thin wrappers; the real work runs on the main thread).
 # --------------------------------------------------------------------------- #
+
+
 def create_box(length, width, height, object_name="Box"):
     return _execute_on_main_thread("create_box", length, width, height, object_name)
 
@@ -316,8 +361,8 @@ def create_cylinder(radius, height, object_name="Cylinder"):
     return _execute_on_main_thread("create_cylinder", radius, height, object_name)
 
 
-def boolean_cut(base_name, tool_name, result_name="Cut"):
-    return _execute_on_main_thread("boolean_cut", base_name, tool_name, result_name)
+def boolean(operation, base_obj, tool_obj, result_name="Cut"):
+    return _execute_on_main_thread("boolean", operation, base_obj, tool_obj, result_name)
 
 
 def fillet_edges(object_name, radius):
@@ -339,7 +384,7 @@ def delete_object(object_name):
 _HANDLERS = {
     "create_box": create_box,
     "create_cylinder": create_cylinder,
-    "boolean_cut": boolean_cut,
+    "boolean": boolean,
     "fillet_edges": fillet_edges,
     "set_param": set_param,
     "get_state": get_state,
@@ -350,6 +395,8 @@ _HANDLERS = {
 # --------------------------------------------------------------------------- #
 # Server startup
 # --------------------------------------------------------------------------- #
+
+
 _SERVER = None
 
 

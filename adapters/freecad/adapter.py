@@ -34,7 +34,7 @@ class FreeCADAdapter(CADAdapter):
     # CADAdapter.get_tools() -> WHAT the agent may request.
     # ------------------------------------------------------------------ #
     def get_tools(self) -> List[Dict[str, Any]]:
-        """Return OpenAI-compatible function schemas for the 7 core operations."""
+        """Return OpenAI-compatible function schemas for the 8 core operations."""
         return [
             {
                 "type": "function",
@@ -72,16 +72,21 @@ class FreeCADAdapter(CADAdapter):
             {
                 "type": "function",
                 "function": {
-                    "name": "boolean_cut",
-                    "description": "Subtract one solid (tool) from another (base) using a boolean cut.",
+                    "name": "boolean",
+                    "description": "Perform a boolean operation between two existing objects. Use 'subtract' to drill holes or remove material (Base minus Tool). Use 'union' to join them. Use 'intersect' to keep only the common volume.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "base_name": _str_schema("Name of the base solid to cut from."),
-                            "tool_name": _str_schema("Name of the tool solid that is subtracted."),
-                            "result_name": _str_schema("Name for the resulting cut object. Default 'Cut'."),
+                            "operation": {
+                                "type": "string",
+                                "enum": ["subtract", "union", "intersect"],
+                                "description": "The boolean operation to perform.",
+                            },
+                            "base_obj_name": _str_schema("Name of the base solid object."),
+                            "tool_obj_name": _str_schema("Name of the tool solid object."),
+                            "result_name": _str_schema("Name for the resulting object. Default 'Cut'."),
                         },
-                        "required": ["base_name", "tool_name"],
+                        "required": ["operation", "base_obj_name", "tool_obj_name"],
                     },
                 },
             },
@@ -179,11 +184,12 @@ class FreeCADAdapter(CADAdapter):
                     )
                 )
 
-            if tool_name == "boolean_cut":
+            if tool_name == "boolean":
                 return str(
-                    self._proxy.boolean_cut(
-                        str(parameters["base_name"]),
-                        str(parameters["tool_name"]),
+                    self._proxy.boolean(
+                        str(parameters["operation"]),
+                        str(parameters["base_obj_name"]),
+                        str(parameters["tool_obj_name"]),
                         str(parameters.get("result_name", "Cut")),
                     )
                 )
