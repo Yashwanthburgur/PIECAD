@@ -16,6 +16,26 @@ class OpBase(BaseModel):
 FaceRef = str
 EdgeRef = str
 
+# --- 2D Semantic Shapes (for Sketching) ---
+
+
+class Circle2D(BaseModel):
+    type: Literal["circle"] = "circle"
+    x: float = Field(description="Center X relative to sketch plane")
+    y: float = Field(description="Center Y relative to sketch plane")
+    radius: float = Field(gt=0)
+
+
+class Rectangle2D(BaseModel):
+    type: Literal["rectangle"] = "rectangle"
+    x: float = Field(description="Center X relative to sketch plane")
+    y: float = Field(description="Center Y relative to sketch plane")
+    width: float = Field(gt=0)
+    height: float = Field(gt=0)
+
+
+SemanticShape = Union[Circle2D, Rectangle2D]
+
 # --- Tier 1 (Core Solid Modeling) ---
 
 
@@ -42,6 +62,23 @@ class Hole(OpBase):
         default=None, description="None = through-all")
     kind: Literal["simple", "counterbore", "countersink", "tapped"] = "simple"
     thread_spec: Optional[str] = Field(default=None, description="e.g. 'M6x1'")
+
+
+# --- Sketch & Extrude (B-rep workflow) ---
+class Sketch(OpBase):
+    op: Literal["sketch"] = "sketch"
+    face_ref: FaceRef = Field(
+        description="The Opaque Pointer ID of the face to sketch on")
+    shapes: list[SemanticShape] = Field(
+        description="List of 2D shapes to draw on this sketch plane")
+
+
+class Extrude(OpBase):
+    op: Literal["extrude"] = "extrude"
+    sketch_id: str = Field(description="The ID of the sketch to extrude")
+    depth: float = Field(gt=0)
+    is_cut: bool = Field(
+        default=False, description="True = Boolean subtract (cut), False = Boolean add (pad)")
 
 
 # --- Tier 2 (Primitives with Built-in Translation) ---
