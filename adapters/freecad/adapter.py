@@ -13,7 +13,7 @@ from typing import Any, Dict, List
 import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
-from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole
+from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude
 
 
 class FreeCADAdapter(CADAdapter):
@@ -81,6 +81,22 @@ class FreeCADAdapter(CADAdapter):
                     "name": "hole",
                     "description": "Create a hole by drilling into a face at a point. Automatically calculates depth for through-all if not specified.",
                     "parameters": Hole.model_json_schema(),
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "sketch",
+                    "description": "Create a 2D sketch on a face of an existing object. Use get_faces first to find the face_ref.",
+                    "parameters": Sketch.model_json_schema(),
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "extrude",
+                    "description": "Extrude a sketch to create a solid (pad) or cut through material. Set is_cut=true for holes/cuts.",
+                    "parameters": Extrude.model_json_schema(),
                 }
             },
         ]
@@ -191,6 +207,32 @@ class FreeCADAdapter(CADAdapter):
                         y,
                         diameter,
                         depth_val,
+                    )
+                )
+
+            if tool_name == "sketch":
+                obj_id = kwargs["id"]
+                face_ref = kwargs["face_ref"]
+                shapes = kwargs["shapes"]
+                return str(
+                    self._proxy.sketch(
+                        str(obj_id),
+                        str(face_ref),
+                        shapes,
+                    )
+                )
+
+            if tool_name == "extrude":
+                obj_id = kwargs["id"]
+                sketch_id = kwargs["sketch_id"]
+                depth = float(kwargs["depth"])
+                is_cut = kwargs.get("is_cut", False)
+                return str(
+                    self._proxy.extrude(
+                        str(obj_id),
+                        str(sketch_id),
+                        depth,
+                        is_cut,
                     )
                 )
 
