@@ -258,28 +258,42 @@ def _impl_set_param(object_name, param_name, value):
 
 
 def _impl_get_state():
-    """Get state of all objects in the active document.
+    """Get state of all objects in the active document as a hierarchical DAG.
 
     Runs on the main thread via the QTimer queue system.
-    Returns a JSON string with object names, types, and basic parametric properties.
+    Returns a JSON string with object id, label, type, visibility, parent/child relationships, and properties.
     """
     doc = _active_doc()
     objects_state = []
     for obj in doc.Objects:
+        # Build base object info
         obj_info = {
-            "Name": obj.Name,
-            "TypeId": obj.TypeId,
+            "id": obj.Name,
+            "label": getattr(obj, "Label", obj.Name),
+            "type": obj.TypeId,
+            "visible": True,  # default, will be overridden if ViewObject exists
+            "parents": [p.Name for p in getattr(obj, "InList", [])],
+            "children": [c.Name for c in getattr(obj, "OutList", [])],
+            "properties": {}
         }
-        # Extract basic parametric properties if they exist
+
+        # Safely extract visibility from ViewObject
+        if hasattr(obj, "ViewObject") and obj.ViewObject:
+            try:
+                obj_info["visible"] = bool(obj.ViewObject.Visibility)
+            except Exception:
+                obj_info["visible"] = True  # default to True on error
+
+        # Extract numeric dimensions into properties dict
         for param in ["Length", "Width", "Height", "Radius"]:
             if hasattr(obj, param):
-                obj_param = getattr(obj, param)
-                # Handle Part::Cylinder where Radius might be a sub-object attribute
                 try:
-                    obj_info[param] = float(obj_param)
-                except (TypeError, ValueError):
-                    pass
+                    obj_info["properties"][param] = float(getattr(obj, param))
+                except (TypeError, ValueError, AttributeError):
+                    pass  # Skip non-numeric or inaccessible properties
+
         objects_state.append(obj_info)
+
     return json.dumps(objects_state)
 
 
