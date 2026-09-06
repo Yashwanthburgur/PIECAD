@@ -14,18 +14,23 @@ face highlighting).
 
 ## 1. One-time setup
 
-### 1a. Install `trimesh` into FreeCAD's OWN Python
+### 1a. Install and verify `trimesh` for FreeCAD
 
-FreeCAD ships its own embedded Python interpreter. This is **not** the
-same Python your backend runs in — installing `trimesh` via your normal
-`uv`/`pip` won't make it available inside FreeCAD.
+FreeCAD ships with its own bundled Python environment, separate from the
+Python environment used by the backend. `trimesh` therefore needs to be
+available in FreeCAD's Python environment.
 
-In FreeCAD's Python console:
+Install `trimesh` from PowerShell using FreeCAD's bundled Python:
+
+```powershell
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" -m pip install trimesh
+
+In this project, `trimesh` has already been installed into FreeCAD's
+Python environment. You can verify it from FreeCAD's Python console:
 
 ```python
-import subprocess, sys
-subprocess.check_call([sys.executable, "-m", "pip", "install", "trimesh"])
-```
+import trimesh
+print(trimesh.__file__)
 
 Verify it worked: `import trimesh` should run with no error, in that same console.
 
