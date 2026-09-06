@@ -19,6 +19,6 @@ class CADAdapter(ABC):
         """Return a JSON string representing the current document objects."""
         pass
 
-    def export_glb(self, filepath: str) -> str:
-        """Exports the current visible CAD state to a .glb file (backend API method, not an LLM tool)."""
-        raise NotImplementedError("export_glb not implemented by this adapter")
+    def export_obj(self, filepath: str) -> str:
+        """Exports the current visible CAD state to a .obj file (backend API method, not an LLM tool)."""
+        raise NotImplementedError("export_obj not implemented by this adapter")

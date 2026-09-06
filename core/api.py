@@ -38,19 +38,19 @@ async def chat_endpoint(request: ChatRequest):
     return ChatResponse(reply=agent.handle_message(request.message))
 
 
-@app.get("/api/state/glb")
-async def get_model_glb():
-    filepath = os.path.abspath("current_state.glb")
+@app.get("/api/state/obj")
+async def get_model_obj():
+    filepath = os.path.abspath("current_state.obj")
     try:
         # Trigger the adapter to export the file to the local disk
         # Use the existing agent instance's adapter
-        agent.adapter.export_glb(filepath)
+        agent.adapter.export_obj(filepath)
 
         # Check if file was actually created
         if not os.path.exists(filepath):
-            return {"error": "GLB file was not generated."}
+            return {"error": "OBJ file was not generated."}
 
-        return FileResponse(filepath, media_type="model/gltf-binary", filename="piecad_state.glb")
+        return FileResponse(filepath, filename="piecad_state.obj")
     except Exception as e:
         return {"error": f"Export failed: {str(e)}"}
 

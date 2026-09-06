@@ -238,6 +238,6 @@ class FreeCADAdapter(CADAdapter):
     # ------------------------------------------------------------------ #
     # Backend API methods (not LLM tools)
     # ------------------------------------------------------------------ #
-    def export_glb(self, filepath: str) -> str:
-        """Exports the current visible CAD state to a .glb file."""
-        return str(self._proxy.export_glb(filepath))
+    def export_obj(self, filepath: str) -> str:
+        """Exports the current visible CAD state to a .obj file."""
+        return str(self._proxy.export_obj(filepath))
