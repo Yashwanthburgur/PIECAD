@@ -72,8 +72,39 @@ _RESULTS_LOCK = threading.Lock()
 
 
 def _sync(doc):
-    """Sync the document after geometry changes: recompute and fit view."""
-    doc.recompute()
+    """Sync the document after geometry changes: recompute and fit view.
+    Raises RuntimeError if recompute fails or if any object becomes invalid.
+    """
+    try:
+        doc.recompute()
+    except Exception as e:
+        raise RuntimeError(f"FreeCAD Kernel Recompute Failed: {str(e)}")
+
+    # Check for invalid objects after recompute
+    for obj in doc.Objects:
+        # Check State attribute for Invalid
+        if hasattr(obj, "State"):
+            state = getattr(obj, "State")
+            if isinstance(state, (list, tuple)) and any("Invalid" in str(s) for s in state):
+                raise RuntimeError(
+                    f"FreeCAD Kernel Invalid Geometry: Object '{obj.Name}' failed to compute (State: {state}).")
+            elif isinstance(state, str) and "Invalid" in state:
+                raise RuntimeError(
+                    f"FreeCAD Kernel Invalid Geometry: Object '{obj.Name}' failed to compute (State: {state}).")
+        # Check isValid method/attribute
+        if hasattr(obj, "isValid"):
+            is_valid = obj.isValid
+            if callable(is_valid):
+                if not is_valid():
+                    raise RuntimeError(
+                        f"FreeCAD Kernel Invalid Geometry: Object '{obj.Name}' failed to compute (State: {getattr(obj, 'State', 'Unknown')}).")
+            else:
+                # If it's an attribute
+                if not is_valid:
+                    raise RuntimeError(
+                        f"FreeCAD Kernel Invalid Geometry: Object '{obj.Name}' failed to compute (State: {getattr(obj, 'State', 'Unknown')}).")
+
+    # Only update view if recompute succeeded and no invalid objects
     try:
         Gui.SendMsgToActiveView("ViewFit")
     except Exception:
