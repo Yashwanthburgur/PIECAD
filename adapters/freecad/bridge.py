@@ -310,38 +310,6 @@ def _impl_hole(id: str, face_ref: str, x: float, y: float, diameter: float, dept
 
     Does B-rep geometry at kernel level (no create_cylinder+boolean).
     """
-def _impl_edit_object(object_name, properties):
-    doc = _active_doc()
-    try:
-        obj = doc.getObject(object_name)
-    except Exception:
-        raise ValueError(f"Object {object_name} not found")
-    try:
-        for prop_name, prop_value in properties.items():
-            try:
-                setattr(obj, prop_name, prop_value)
-            except Exception:
-                raise ValueError(f"Failed to set property {prop_name} to {prop_value}")
-    except Exception:
-        raise
-    _finish(doc)
-    return f"Successfully edited {object_name} with properties {properties}"
-def _impl_edit_object(object_name, properties):
-    doc = _active_doc()
-    try:
-        obj = doc.getObject(object_name)
-    except Exception:
-        raise ValueError(f"Object {object_name} not found")
-    try:
-        for prop_name, prop_value in properties.items():
-            try:
-                setattr(obj, prop_name, prop_value)
-            except Exception:
-                raise ValueError(f"Failed to set property {prop_name} to {prop_value}")
-    except Exception:
-        raise
-    _finish(doc)
-    return f"Successfully edited {object_name} with properties {properties}"
     import FreeCAD
 
     # Parse face_ref (format: "ObjectName_face_N")
@@ -403,8 +371,6 @@ def _impl_edit_object(object_name, properties):
     cut = doc.addObject("Part::Cut", id)
     cut.Base = target
     cut.Tool = tool
-def edit_object(object_name, properties):
-    return _execute_on_main_thread("edit_object", object_name, properties)
 
     # Hide the base and tool objects
     try:
@@ -420,9 +386,26 @@ def edit_object(object_name, properties):
     return f"Successfully created hole '{id}' on face {face_ref} with diameter {diameter}, depth {'through-all' if depth <= 0 else str(depth)}."
 
 
+def _impl_edit_object(object_name, properties):
+    doc = _active_doc()
+    try:
+        obj = doc.getObject(object_name)
+    except Exception:
+        raise ValueError(f"Object {object_name} not found")
+    try:
+        for prop_name, prop_value in properties.items():
+            try:
+                setattr(obj, prop_name, prop_value)
+            except Exception:
+                raise ValueError(
+                    f"Failed to set property {prop_name} to {prop_value}")
+    except Exception:
+        raise
+    _finish(doc)
+    return f"Successfully edited {object_name} with properties {properties}"
+
+
 def _impl_get_faces(object_name: str):
-def edit_object(object_name, properties):
-    return _execute_on_main_thread("edit_object", object_name, properties)
     """Query the B-rep faces of an existing object.
 
     Returns a list of face dicts with:
@@ -437,14 +420,12 @@ def edit_object(object_name, properties):
         raise ValueError(f"Object not found: {object_name}")
 
     if not hasattr(obj, "Shape") or obj.Shape is None:
-"edit_object": edit_object,
         return []
 
     faces = []
     for face_index, face in enumerate(obj.Shape.Faces, start=1):
         center = face.CenterOfMass
         face_dict = {
-"edit_object": _impl_edit_object,
             "face_index": face_index,
             "center": {"x": center.x, "y": center.y, "z": center.z},
             "area": face.Area,
@@ -463,7 +444,6 @@ def _impl_export_obj(filepath: str):
     visible_objs = [
         obj for obj in doc.Objects
         if hasattr(obj, "ViewObject") and obj.ViewObject and obj.ViewObject.Visibility
-"edit_object": _impl_edit_object,
     ]
 
     if not visible_objs:
@@ -486,6 +466,7 @@ _IMPLEMENTATIONS = {
     "translate": _impl_translate,
     "get_faces": _impl_get_faces,
     "hole": _impl_hole,
+    "edit_object": _impl_edit_object,
     "export_obj": _impl_export_obj,
 }
 
@@ -605,6 +586,10 @@ def hole(id, face_ref, x, y, diameter, depth=100.0):
     return _execute_on_main_thread("hole", id, face_ref, x, y, diameter, depth)
 
 
+def edit_object(object_name, properties):
+    return _execute_on_main_thread("edit_object", object_name, properties)
+
+
 def export_obj(filepath):
     return _execute_on_main_thread("export_obj", filepath)
 
@@ -620,6 +605,7 @@ _HANDLERS = {
     "translate": translate,
     "get_faces": get_faces,
     "hole": hole,
+    "edit_object": edit_object,
     "export_obj": export_obj,
 }
 
