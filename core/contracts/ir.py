@@ -58,3 +58,20 @@ class Cylinder(OpBase):
     radius: float = Field(gt=0)
     height: float = Field(gt=0)
     origin: Vec3 = Vec3(x=0, y=0, z=0)
+
+
+# --- PieCAD Remote (mobile viewer) ---
+class RemoteIntent(BaseModel):
+    """Structured intent captured by PieCAD Remote (mobile viewer).
+
+    The viewer only ever supplies WHERE (which object, and the exact 3D
+    point that was touched, in FreeCAD's mm/Z-up convention) plus the
+    user's raw utterance. Resolving that point to a specific face, and
+    deciding WHAT CAD operation it means, happens entirely on the backend/
+    agent side -- the viewer stays CAD-agnostic, same principle as the
+    FreeCAD panel from Sprint 3A.
+    """
+    session_id: str
+    cad_object_name: str
+    world_position: Vec3
+    text: str

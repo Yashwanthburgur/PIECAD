@@ -418,20 +418,64 @@ def _impl_get_faces(object_name: str):
 
 
 def _impl_export_glb(filepath: str):
-    """Export visible objects to a GLB file using FreeCAD's GLTF exporter."""
+    """Export visible objects to a GLB file.
+
+    Tessellates each shape directly via Shape.tessellate() rather than
+    depending on FreeCAD's bundled `importGLTF` module. That module isn't
+    reliably present across FreeCAD builds/versions (known gaps are why
+    third-party patches like freecad-to-gltf exist), so this avoids the
+    dependency entirely and gives us direct control over the export.
+
+    Requires `trimesh` installed into FreeCAD's OWN embedded Python:
+        import subprocess, sys
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "trimesh"])
+
+    IMPORTANT for the mobile viewer's coordinate conversion (see
+    remote/src/lib/coords.js): unlike FreeCAD's own importGLTF exporter,
+    trimesh does NOT rotate Z-up to Y-up on export -- it writes vertices
+    as-is. Only the millimeter -> meter scale conversion applies here, not
+    an axis swap. Update coords.js to match if you switch to this exporter.
+    """
+    import numpy as np
+    import trimesh
+
     doc = _active_doc()
 
     # Filter for visible objects only (skip hidden tools/base objects)
     visible_objs = [
         obj for obj in doc.Objects
         if hasattr(obj, "ViewObject") and obj.ViewObject and obj.ViewObject.Visibility
+        and hasattr(obj, "Shape") and obj.Shape is not None
     ]
 
     if not visible_objs:
         return "Error: No visible objects to export."
 
-    import importGLTF
-    importGLTF.export(visible_objs, filepath)
+    scene = trimesh.Scene()
+    for obj in visible_objs:
+        # 0.1mm linear deflection: fine enough to look right on a phone
+        # screen, coarse enough to keep payloads small. Lower this if
+        # curved faces look visibly faceted.
+        vertices, triangles = obj.Shape.tessellate(0.1)
+        if not vertices or not triangles:
+            continue
+        verts_mm = np.array([(v.x, v.y, v.z) for v in vertices])
+        faces = np.array(triangles)
+        mesh = trimesh.Trimesh(vertices=verts_mm, faces=faces, process=False)
+        # Deliberately NOT scaling to meters here. glTF's spec convention
+        # is meters, but this is a closed loop (our own exporter, our own
+        # viewer) -- keeping raw millimeter values means the exported
+        # geometry matches the scale the viewer's camera and controls were
+        # already set up for. Scaling to "proper" glTF meters made a
+        # 20x10x5mm box shrink to 0.02x0.01x0.005 units, invisible from a
+        # camera sitting at [200,200,200] -- that was the black screen.
+        # node_name is what the mobile viewer reads back as
+        # `event.object.name` in SceneModel.jsx -- keep it equal to the
+        # FreeCAD object name so the /api/intent get_faces() lookup
+        # resolves correctly.
+        scene.add_geometry(mesh, node_name=obj.Name, geom_name=obj.Name)
+
+    scene.export(filepath)
     return "Exported successfully."
 
 

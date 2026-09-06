@@ -1,5 +1,6 @@
 """PieCAD Dockable Panel for FreeCAD - Pure UI Client."""
 
+import base64
 import json
 import urllib.request
 import urllib.error
@@ -7,13 +8,14 @@ import urllib.error
 import FreeCADGui as Gui
 
 try:
-    from PySide6 import QtWidgets, QtCore
+    from PySide6 import QtWidgets, QtCore, QtGui
 except ImportError:
     try:
-        from PySide2 import QtWidgets, QtCore
+        from PySide2 import QtWidgets, QtCore, QtGui
     except ImportError:
         from PySide import QtGui as QtWidgets
         from PySide import QtCore
+        from PySide import QtGui
 
 
 class RequestWorker(QtCore.QThread):
@@ -117,6 +119,21 @@ class PieCADPanel(QtWidgets.QDockWidget):
         """)
         self.send_btn.clicked.connect(self.send_message)
 
+        self.pair_btn = QtWidgets.QPushButton("Pair Phone")
+        self.pair_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3c3489;
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+                padding: 6px 14px;
+            }
+            QPushButton:hover {
+                background-color: #534ab7;
+            }
+        """)
+        self.pair_btn.clicked.connect(self.open_pairing_dialog)
+
         self.clear_btn = QtWidgets.QPushButton("Clear")
         self.clear_btn.setStyleSheet("""
             QPushButton {
@@ -132,6 +149,7 @@ class PieCADPanel(QtWidgets.QDockWidget):
         self.clear_btn.clicked.connect(self.chat_history.clear)
 
         btn_layout.addWidget(self.send_btn)
+        btn_layout.addWidget(self.pair_btn)
         btn_layout.addWidget(self.clear_btn)
         layout.addLayout(btn_layout)
 
@@ -167,6 +185,50 @@ class PieCADPanel(QtWidgets.QDockWidget):
         self.status_label.setText("Error")
         self.status_label.setStyleSheet("color: #e57373; font-weight: bold; font-size: 11px;")
         self.send_btn.setEnabled(True)
+
+    def open_pairing_dialog(self):
+        """Request a pairing session from the backend and show its QR code.
+
+        Synchronous/blocking on purpose -- this is a local call to a
+        backend running on the same machine, and it's a one-off action
+        (not on the hot chat path), so a RequestWorker thread would be
+        overkill here.
+        """
+        try:
+            req = urllib.request.Request(
+                "http://127.0.0.1:8000/api/session",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10.0) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except Exception as e:
+            self.append_log("System Error", f"Could not start pairing session: {e}", "#e57373")
+            return
+
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Pair PieCAD Remote")
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        img_label = QtWidgets.QLabel()
+        pixmap = QtGui.QPixmap()
+        pixmap.loadFromData(base64.b64decode(data["qr_png_base64"]))
+        img_label.setPixmap(pixmap.scaledToWidth(240))
+        img_label.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(img_label)
+
+        url_label = QtWidgets.QLabel(data["url"])
+        url_label.setWordWrap(True)
+        url_label.setStyleSheet("color: #bbb; font-size: 11px;")
+        layout.addWidget(url_label)
+
+        hint = QtWidgets.QLabel("Scan with your phone's camera on the same Wi-Fi network.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #888; font-size: 10px;")
+        layout.addWidget(hint)
+
+        dialog.exec()
 
 
 def load_in_freecad():

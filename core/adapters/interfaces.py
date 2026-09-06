@@ -10,8 +10,18 @@ class CADAdapter(ABC):
         pass
 
     @abstractmethod
-    def execute_command(self, tool_name: str, parameters: Dict[str, Any]) -> str:
-        """Execute a tool call against the CAD system."""
+    def execute_command(self, tool_name: str, **kwargs: Any) -> str:
+        """Execute a tool call against the CAD system.
+
+        FIX: this was previously declared as
+        `execute_command(self, tool_name, parameters: Dict)`, which never
+        matched how it's actually called (`adapter.execute_command(name,
+        **args)` in core/agent.py) or how FreeCADAdapter actually
+        implements it (**kwargs). Python's ABC machinery doesn't enforce
+        signature matching so this went unnoticed -- but any future
+        adapter (Onshape, SolidWorks) written against the old declared
+        signature would silently break when the orchestrator calls it.
+        """
         pass
 
     @abstractmethod
