@@ -90,6 +90,14 @@ class Fillet(OpBase):
     radius: float = Field(gt=0, description="Radius of the fillet in mm.")
 
 
+class Chamfer(OpBase):
+    op: Literal["chamfer"] = "chamfer"
+    target_id: str = Field(..., description="The ID of the body to chamfer.")
+    edge_refs: list[str] = Field(
+        ..., description="List of opaque edge IDs to chamfer (e.g. ['Box_edge_1']).")
+    size: float = Field(gt=0, description="Distance of the chamfer in mm.")
+
+
 # --- Tier 2 (Primitives with Built-in Translation) ---
 class Box(OpBase):
     op: Literal["box"] = "box"

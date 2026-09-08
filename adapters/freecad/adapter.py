@@ -13,7 +13,7 @@ from typing import Any, Dict, List
 import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
-from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet
+from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer
 
 
 class FreeCADAdapter(CADAdapter):
@@ -119,6 +119,14 @@ class FreeCADAdapter(CADAdapter):
                     "name": "fillet",
                     "description": "Apply a fillet to a specific edge of an object. Use get_edges first to find the edge_ref.",
                     "parameters": Fillet.model_json_schema(),
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "chamfer",
+                    "description": "Apply a chamfer to specific edges of an object. Use get_edges first to find the edge_refs.",
+                    "parameters": Chamfer.model_json_schema(),
                 }
             },
         ]
@@ -275,6 +283,20 @@ class FreeCADAdapter(CADAdapter):
                         str(target_id),
                         edge_refs,
                         radius,
+                    )
+                )
+
+            if tool_name == "chamfer":
+                obj_id = kwargs["id"]
+                target_id = kwargs["target_id"]
+                edge_refs = kwargs["edge_refs"]
+                size = float(kwargs["size"])
+                return str(
+                    self._proxy.chamfer(
+                        str(obj_id),
+                        str(target_id),
+                        edge_refs,
+                        size,
                     )
                 )
 
