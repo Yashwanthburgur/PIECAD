@@ -221,25 +221,6 @@ def _impl_boolean(operation: str, base_obj: str, tool_obj: str, result_name: str
     return f"Successfully performed '{operation}' on '{base_obj}' and '{tool_obj}' as '{new_obj.Name}'."
 
 
-def _impl_fillet_edges(object_name, radius):
-    doc = _active_doc()
-
-    obj = doc.getObject(object_name)
-    if obj is None:
-        raise ValueError(f"Object not found: {object_name}")
-
-    fillet = doc.addObject("Part::Fillet", object_name + "_Fillet")
-    fillet.Base = obj
-    fillet.Edges = ["Edge" + str(i + 1) for i in range(len(obj.Shape.Edges))]
-    fillet.Radius = float(radius)
-
-    _impl_set_visible(doc, object_name, False)
-
-    _finish(doc)
-    _impl_set_visible(doc, fillet.Name, True)
-    return f"Successfully filleted edges of {object_name} as '{fillet.Name}'."
-
-
 def _impl_set_param(object_name, param_name, value):
     doc = _active_doc()
 
@@ -865,7 +846,6 @@ _IMPLEMENTATIONS = {
     "create_box": _impl_create_box,
     "create_cylinder": _impl_create_cylinder,
     "boolean": _impl_boolean,
-    "fillet_edges": _impl_fillet_edges,
     "set_param": _impl_set_param,
     "get_state": _impl_get_state,
     "delete_object": _impl_delete_object,
@@ -1029,7 +1009,6 @@ _HANDLERS = {
     "create_box": create_box,
     "create_cylinder": create_cylinder,
     "boolean": boolean,
-    "fillet_edges": fillet_edges,
     "set_param": set_param,
     "get_state": get_state,
     "delete_object": delete_object,
