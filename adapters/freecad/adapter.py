@@ -266,12 +266,14 @@ class FreeCADAdapter(CADAdapter):
 
             if tool_name == "fillet":
                 obj_id = kwargs["id"]
-                edge_ref = kwargs["edge_ref"]
+                target_id = kwargs["target_id"]
+                edge_refs = kwargs["edge_refs"]
                 radius = float(kwargs["radius"])
                 return str(
                     self._proxy.fillet(
                         str(obj_id),
-                        str(edge_ref),
+                        str(target_id),
+                        edge_refs,
                         radius,
                     )
                 )

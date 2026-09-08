@@ -512,55 +512,62 @@ def _impl_get_edges(object_name: str):
     return edges
 
 
-def _impl_fillet(id: str, edge_ref: str, radius: float):
-    """Apply a fillet to a specific edge of an object.
+def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float):
+    """Apply a fillet to specific edges of an object.
 
     Args:
         id: Unique ID for the fillet result object
-        edge_ref: Opaque pointer format "ObjectName_edge_N" (1-based index)
+        target_id: Name of the target object to fillet
+        edge_refs: List of opaque pointer strings, format "ObjectName_edge_N" (1-based index)
         radius: Fillet radius (must be > 0)
     """
-    # Parse edge_ref (format: "ObjectName_edge_N")
-    if "_edge_" not in edge_ref:
-        raise ValueError(
-            f"Invalid edge_ref format: {edge_ref}. Expected 'ObjectName_edge_N'")
-
-    parts = edge_ref.split("_edge_")
-    if len(parts) != 2:
-        raise ValueError(
-            f"Invalid edge_ref format: {edge_ref}. Expected 'ObjectName_edge_N'")
-
-    target_name = parts[0]
-    try:
-        edge_index = int(parts[1]) - 1  # Convert to 0-based index
-    except ValueError:
-        raise ValueError(f"Invalid edge index in edge_ref: {edge_ref}")
-
     if radius <= 0:
         raise ValueError(f"Fillet radius must be > 0, got {radius}")
 
+    if not edge_refs:
+        raise ValueError("edge_refs list cannot be empty")
+
     doc = _active_doc()
-    target = doc.getObject(target_name)
+    target = doc.getObject(target_id)
     if target is None:
-        raise ValueError(f"Target object not found: {target_name}")
+        raise ValueError(f"Target object not found: {target_id}")
 
     if not hasattr(target, "Shape") or target.Shape is None:
-        raise ValueError(f"Target object has no Shape: {target_name}")
+        raise ValueError(f"Target object has no Shape: {target_id}")
 
-    try:
-        edge = target.Shape.Edges[edge_index]
-    except IndexError:
-        raise ValueError(
-            f"Edge index {edge_index + 1} out of range for object {target_name}")
+    # Parse all edge_refs and build the FreeCAD edges list
+    freecad_edges = []
+    for edge_ref in edge_refs:
+        if "_edge_" not in edge_ref:
+            raise ValueError(
+                f"Invalid edge_ref format: {edge_ref}. Expected 'ObjectName_edge_N'")
+
+        parts = edge_ref.split("_edge_")
+        if len(parts) != 2:
+            raise ValueError(
+                f"Invalid edge_ref format: {edge_ref}. Expected 'ObjectName_edge_N'")
+
+        # Verify the target object matches
+        if parts[0] != target_id:
+            raise ValueError(
+                f"Edge ref object '{parts[0]}' does not match target_id '{target_id}'")
+
+        try:
+            # FreeCAD uses 1-based edge indices
+            extracted_index = int(parts[1])
+        except ValueError:
+            raise ValueError(f"Invalid edge index in edge_ref: {edge_ref}")
+
+        # Part::Fillet.Edges expects tuples of (1-based_index, radius1, radius2)
+        freecad_edges.append((extracted_index, float(radius), float(radius)))
 
     # Create fillet feature
-    fillet_obj = doc.addObject("Part::Fillet", id)
-    fillet_obj.Base = target
-    # Part::Fillet.Edges expects a list of tuples: [(edge_index_int, radius1, radius2)]
-    # where edge_index_int is the 0-based integer index of the edge
-    edge_str = f"Edge{int(edge_index) + 1}"
-    fillet_obj.Edges = [
-        (edge_str, float(radius), float(radius))]
+    new_obj = doc.addObject("Part::Fillet", id)
+    new_obj.Base = target
+    new_obj.Edges = freecad_edges
+    # Note: Part::Fillet does not have a .Radius property in FreeCAD 1.0
+    # Radii are specified per-edge in the Edges list
+
     # Hide the original object since it's consumed
     try:
         target.ViewObject.Visibility = False
@@ -568,7 +575,7 @@ def _impl_fillet(id: str, edge_ref: str, radius: float):
         pass
 
     _sync(doc)
-    return f"Successfully created fillet '{id}' on edge {edge_ref} with radius {radius}."
+    return f"Successfully created fillet '{id}' on {len(edge_refs)} edge(s) of '{target_id}' with radius {radius}."
 
 
 def _impl_export_obj(filepath: str):
@@ -943,8 +950,8 @@ def get_edges(object_name):
     return _execute_on_main_thread("get_edges", object_name)
 
 
-def fillet(id, edge_ref, radius):
-    return _execute_on_main_thread("fillet", id, edge_ref, radius)
+def fillet(id, target_id, edge_refs, radius):
+    return _execute_on_main_thread("fillet", id, target_id, edge_refs, radius)
 
 
 _HANDLERS = {

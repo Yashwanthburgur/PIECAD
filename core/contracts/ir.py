@@ -84,9 +84,10 @@ class Extrude(OpBase):
 # --- Edge Dressing (Fillet/Chamfer) ---
 class Fillet(OpBase):
     op: Literal["fillet"] = "fillet"
-    edge_ref: EdgeRef = Field(
-        description="The Opaque Pointer ID of the edge to fillet")
-    radius: float = Field(gt=0, description="Fillet radius in mm")
+    target_id: str = Field(..., description="The ID of the body to fillet.")
+    edge_refs: list[str] = Field(
+        ..., description="List of opaque edge IDs to round (e.g. ['Box_edge_1']).")
+    radius: float = Field(gt=0, description="Radius of the fillet in mm.")
 
 
 # --- Tier 2 (Primitives with Built-in Translation) ---
