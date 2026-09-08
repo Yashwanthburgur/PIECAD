@@ -13,7 +13,7 @@ from typing import Any, Dict, List
 import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
-from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude
+from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet
 
 
 class FreeCADAdapter(CADAdapter):
@@ -97,6 +97,28 @@ class FreeCADAdapter(CADAdapter):
                     "name": "extrude",
                     "description": "Extrude a sketch to create a solid (pad) or cut through material. Set is_cut=true for holes/cuts.",
                     "parameters": Extrude.model_json_schema(),
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_edges",
+                    "description": "Query the B-rep edges of an existing object to use as references for fillets. Returns edge IDs, lengths, and center of mass coordinates.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "object_name": {"type": "string", "description": "The ID of the object to query"}
+                        },
+                        "required": ["object_name"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "fillet",
+                    "description": "Apply a fillet to a specific edge of an object. Use get_edges first to find the edge_ref.",
+                    "parameters": Fillet.model_json_schema(),
                 }
             },
         ]
@@ -233,6 +255,24 @@ class FreeCADAdapter(CADAdapter):
                         str(sketch_id),
                         depth,
                         is_cut,
+                    )
+                )
+
+            if tool_name == "get_edges":
+                object_name = kwargs["object_name"]
+                edges = self._proxy.get_edges(str(object_name))
+                import json
+                return json.dumps(edges)
+
+            if tool_name == "fillet":
+                obj_id = kwargs["id"]
+                edge_ref = kwargs["edge_ref"]
+                radius = float(kwargs["radius"])
+                return str(
+                    self._proxy.fillet(
+                        str(obj_id),
+                        str(edge_ref),
+                        radius,
                     )
                 )
 

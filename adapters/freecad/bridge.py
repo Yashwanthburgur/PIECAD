@@ -481,6 +481,96 @@ def _impl_get_faces(object_name: str):
     return faces
 
 
+def _impl_get_edges(object_name: str):
+    """Query the B-rep edges of an existing object.
+
+    Returns a list of edge dicts with:
+    - edge_index (1-based index)
+    - center (CenterOfMass as dict with x, y, z)
+    - length (float)
+    - edge_id (opaque pointer string)
+    """
+    doc = _active_doc()
+    obj = doc.getObject(object_name)
+    if obj is None:
+        raise ValueError(f"Object not found: {object_name}")
+
+    if not hasattr(obj, "Shape") or obj.Shape is None:
+        return []
+
+    edges = []
+    for edge_index, edge in enumerate(obj.Shape.Edges, start=1):
+        center = edge.CenterOfMass
+        edge_dict = {
+            "edge_index": edge_index,
+            "center": {"x": center.x, "y": center.y, "z": center.z},
+            "length": edge.Length,
+            "edge_id": f"{object_name}_edge_{edge_index}",
+        }
+        edges.append(edge_dict)
+
+    return edges
+
+
+def _impl_fillet(id: str, edge_ref: str, radius: float):
+    """Apply a fillet to a specific edge of an object.
+
+    Args:
+        id: Unique ID for the fillet result object
+        edge_ref: Opaque pointer format "ObjectName_edge_N" (1-based index)
+        radius: Fillet radius (must be > 0)
+    """
+    # Parse edge_ref (format: "ObjectName_edge_N")
+    if "_edge_" not in edge_ref:
+        raise ValueError(
+            f"Invalid edge_ref format: {edge_ref}. Expected 'ObjectName_edge_N'")
+
+    parts = edge_ref.split("_edge_")
+    if len(parts) != 2:
+        raise ValueError(
+            f"Invalid edge_ref format: {edge_ref}. Expected 'ObjectName_edge_N'")
+
+    target_name = parts[0]
+    try:
+        edge_index = int(parts[1]) - 1  # Convert to 0-based index
+    except ValueError:
+        raise ValueError(f"Invalid edge index in edge_ref: {edge_ref}")
+
+    if radius <= 0:
+        raise ValueError(f"Fillet radius must be > 0, got {radius}")
+
+    doc = _active_doc()
+    target = doc.getObject(target_name)
+    if target is None:
+        raise ValueError(f"Target object not found: {target_name}")
+
+    if not hasattr(target, "Shape") or target.Shape is None:
+        raise ValueError(f"Target object has no Shape: {target_name}")
+
+    try:
+        edge = target.Shape.Edges[edge_index]
+    except IndexError:
+        raise ValueError(
+            f"Edge index {edge_index + 1} out of range for object {target_name}")
+
+    # Create fillet feature
+    fillet_obj = doc.addObject("Part::Fillet", id)
+    fillet_obj.Base = target
+    # Part::Fillet.Edges expects a list of tuples: [(edge_index_int, radius1, radius2)]
+    # where edge_index_int is the 0-based integer index of the edge
+    edge_str = f"Edge{int(edge_index) + 1}"
+    fillet_obj.Edges = [
+        (edge_str, float(radius), float(radius))]
+    # Hide the original object since it's consumed
+    try:
+        target.ViewObject.Visibility = False
+    except Exception:
+        pass
+
+    _sync(doc)
+    return f"Successfully created fillet '{id}' on edge {edge_ref} with radius {radius}."
+
+
 def _impl_export_obj(filepath: str):
     """Export visible objects to a Wavefront OBJ file using FreeCAD's Mesh module."""
     doc = _active_doc()
@@ -708,10 +798,12 @@ _IMPLEMENTATIONS = {
     "delete_object": _impl_delete_object,
     "translate": _impl_translate,
     "get_faces": _impl_get_faces,
+    "get_edges": _impl_get_edges,
     "hole": _impl_hole,
     "edit_object": _impl_edit_object,
     "sketch": _impl_sketch,
     "extrude": _impl_extrude,
+    "fillet": _impl_fillet,
     "export_obj": _impl_export_obj,
 }
 
@@ -847,6 +939,14 @@ def extrude(id, sketch_id, depth, is_cut=False):
     return _execute_on_main_thread("extrude", id, sketch_id, depth, is_cut)
 
 
+def get_edges(object_name):
+    return _execute_on_main_thread("get_edges", object_name)
+
+
+def fillet(id, edge_ref, radius):
+    return _execute_on_main_thread("fillet", id, edge_ref, radius)
+
+
 _HANDLERS = {
     "create_box": create_box,
     "create_cylinder": create_cylinder,
@@ -857,10 +957,12 @@ _HANDLERS = {
     "delete_object": delete_object,
     "translate": translate,
     "get_faces": get_faces,
+    "get_edges": get_edges,
     "hole": hole,
     "edit_object": edit_object,
     "sketch": sketch,
     "extrude": extrude,
+    "fillet": fillet,
     "export_obj": export_obj,
 }
 

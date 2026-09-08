@@ -81,6 +81,14 @@ class Extrude(OpBase):
         default=False, description="True = Boolean subtract (cut), False = Boolean add (pad)")
 
 
+# --- Edge Dressing (Fillet/Chamfer) ---
+class Fillet(OpBase):
+    op: Literal["fillet"] = "fillet"
+    edge_ref: EdgeRef = Field(
+        description="The Opaque Pointer ID of the edge to fillet")
+    radius: float = Field(gt=0, description="Fillet radius in mm")
+
+
 # --- Tier 2 (Primitives with Built-in Translation) ---
 class Box(OpBase):
     op: Literal["box"] = "box"
