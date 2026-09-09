@@ -625,6 +625,17 @@ def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float):
     return f"Successfully created chamfer '{id}' on {len(edge_refs)} edge(s) of '{target_id}' with size {size}."
 
 
+def _impl_clear_document():
+    """Clear the active FreeCAD document by closing it and creating a new one."""
+    try:
+        if App.ActiveDocument:
+            App.closeDocument(App.ActiveDocument.Name)
+    except Exception:
+        pass
+    App.newDocument("Unnamed")
+    return "Document cleared successfully."
+
+
 def _impl_export_obj(filepath: str):
     """Export visible objects to a Wavefront OBJ file using FreeCAD's Mesh module."""
     doc = _active_doc()
@@ -859,6 +870,7 @@ _IMPLEMENTATIONS = {
     "fillet": _impl_fillet,
     "chamfer": _impl_chamfer,
     "export_obj": _impl_export_obj,
+    "clear_document": _impl_clear_document,
 }
 
 
@@ -1005,6 +1017,10 @@ def chamfer(id, target_id, edge_refs, size):
     return _execute_on_main_thread("chamfer", id, target_id, edge_refs, size)
 
 
+def clear_document():
+    return _execute_on_main_thread("clear_document")
+
+
 _HANDLERS = {
     "create_box": create_box,
     "create_cylinder": create_cylinder,
@@ -1022,6 +1038,7 @@ _HANDLERS = {
     "fillet": fillet,
     "chamfer": chamfer,
     "export_obj": export_obj,
+    "clear_document": clear_document,
 }
 
 

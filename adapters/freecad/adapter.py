@@ -342,6 +342,13 @@ class FreeCADAdapter(CADAdapter):
             return "[]"
 
     # ------------------------------------------------------------------ #
+    # Document Management
+    # ------------------------------------------------------------------ #
+    def clear_document(self):
+        """Clear the FreeCAD document by closing it and creating a new one."""
+        return self._proxy.clear_document()
+
+    # ------------------------------------------------------------------ #
     # Backend API methods (not LLM tools)
     # ------------------------------------------------------------------ #
     def export_obj(self, filepath: str) -> str:

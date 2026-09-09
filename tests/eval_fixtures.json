@@ -1,0 +1,70 @@
+[
+  {
+    "id": "primitive_creation",
+    "name": "Primitive Creation",
+    "prompt": "Make a base plate 100x100x10.",
+    "expected_state": [
+      {
+        "condition": "exists_type",
+        "type": "Part::Box",
+        "properties": {
+          "Length": 100,
+          "Width": 100,
+          "Height": 10
+        }
+      }
+    ]
+  },
+  {
+    "id": "indecisive_client",
+    "name": "Indecisive Client",
+    "prompt": "Make a box 50x50x50. Actually, change the width to 80.",
+    "expected_state": [
+      {
+        "condition": "exists_type",
+        "type": "Part::Box",
+        "properties": {
+          "Width": 80
+        }
+      }
+    ]
+  },
+  {
+    "id": "boolean_hierarchy",
+    "name": "Boolean Hierarchy",
+    "prompt": "Make a box 50x50x50. Make a cylinder radius 10 height 50. Subtract the cylinder from the box.",
+    "expected_state": [
+      {
+        "condition": "exists_type",
+        "type": "Part::Cut"
+      },
+      {
+        "condition": "dag_children_of_cut",
+        "expected_children": ["Part::Box", "Part::Cylinder"]
+      }
+    ]
+  },
+  {
+    "id": "edge_fillet",
+    "name": "Edge Fillet",
+    "prompt": "Make a box 20x20x20. Find its edges and fillet the first one with radius 2.",
+    "expected_state": [
+      {
+        "condition": "exists_type",
+        "type": "Part::Fillet"
+      }
+    ]
+  },
+  {
+    "id": "semantic_sketch",
+    "name": "Semantic Sketch",
+    "prompt": "Make a box 50x50x10. On the top face, sketch a 10x10 rectangle and extrude it by 20.",
+    "expected_state": [
+      {
+        "condition": "exists_type",
+        "type": "Part::Feature",
+        "description": "Extrusion result should be a Part::Feature"
+      }
+    ]
+  }
+]
