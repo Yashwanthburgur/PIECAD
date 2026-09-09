@@ -62,6 +62,8 @@ from .topology import (
 # Import primitive and boolean implementations
 from .primitives import _impl_create_box, _impl_create_cylinder
 from .boolean import _impl_boolean, _impl_hole
+from .features import _impl_fillet, _impl_chamfer
+from .sketch import _impl_sketch, _impl_extrude
 
 # Dynamically resolve project root (two levels up from this file's directory)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
