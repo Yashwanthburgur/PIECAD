@@ -31,9 +31,6 @@ Usage (paste into the FreeCAD Python console):
         exec(f.read)
 """
 
-import Part
-import FreeCADGui as Gui
-import FreeCAD as App
 import json
 import xmlrpc.server
 import uuid
@@ -42,9 +39,9 @@ import queue
 import os
 from pathlib import Path
 
-# Dynamically resolve project root (two levels up from this file's directory)
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-
+import Part
+import FreeCADGui as Gui
+import FreeCAD as App
 
 # Import QtCore robustly across FreeCAD Qt bindings.
 try:
@@ -55,10 +52,21 @@ except ImportError:
     except ImportError:
         from PySide import QtCore
 
+# Import topology functions
+from .topology import (
+    _impl_get_state,
+    _impl_get_faces,
+    _impl_get_edges,
+)
+
+# Dynamically resolve project root (two levels up from this file's directory)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 # --------------------------------------------------------------------------- #
 # Thread-safe queue and results storage for main-thread execution.
 # --------------------------------------------------------------------------- #
+
 
 _WORK_QUEUE: "queue.Queue[tuple]" = queue.Queue()
 _RESULTS: "dict[str, tuple[str, str]]" = {}
@@ -154,6 +162,21 @@ def _impl_set_visible(doc, name, visible):
         pass
 
 
+def _impl_clear_document():
+    """Clear the active FreeCAD document by closing it and creating a new one."""
+    try:
+        if App.ActiveDocument:
+            App.closeDocument(App.ActiveDocument.Name)
+    except Exception:
+        pass
+    App.newDocument("Unnamed")
+    return "Document cleared successfully."
+
+
+# --------------------------------------------------------------------------- #
+# Primitive Implementations
+# --------------------------------------------------------------------------- #
+
 def _impl_create_box(length, width, height, object_name="Box"):
     doc = _active_doc()
     obj = doc.addObject("Part::Box", object_name)
@@ -236,46 +259,6 @@ def _impl_set_param(object_name, param_name, value):
     setattr(obj, param_name, float(value))
     _finish(doc)
     return f"Successfully updated {object_name}.{param_name} to {value}."
-
-
-def _impl_get_state():
-    """Get state of all objects in the active document as a hierarchical DAG.
-
-    Runs on the main thread via the QTimer queue system.
-    Returns a JSON string with object id, label, type, visibility, parent/child relationships, and properties.
-    """
-    doc = _active_doc()
-    objects_state = []
-    for obj in doc.Objects:
-        # Build base object info
-        obj_info = {
-            "id": obj.Name,
-            "label": getattr(obj, "Label", obj.Name),
-            "type": obj.TypeId,
-            "visible": True,  # default, will be overridden if ViewObject exists
-            "parents": [p.Name for p in getattr(obj, "InList", [])],
-            "children": [c.Name for c in getattr(obj, "OutList", [])],
-            "properties": {}
-        }
-
-        # Safely extract visibility from ViewObject
-        if hasattr(obj, "ViewObject") and obj.ViewObject:
-            try:
-                obj_info["visible"] = bool(obj.ViewObject.Visibility)
-            except Exception:
-                obj_info["visible"] = True  # default to True on error
-
-        # Extract numeric dimensions into properties dict
-        for param in ["Length", "Width", "Height", "Radius"]:
-            if hasattr(obj, param):
-                try:
-                    obj_info["properties"][param] = float(getattr(obj, param))
-                except (TypeError, ValueError, AttributeError):
-                    pass  # Skip non-numeric or inaccessible properties
-
-        objects_state.append(obj_info)
-
-    return json.dumps(objects_state)
 
 
 def _impl_delete_object(target_feature_id: str):
@@ -431,68 +414,6 @@ def _impl_edit_object(object_name, properties):
     return f"Successfully edited {object_name} with properties {properties}"
 
 
-def _impl_get_faces(object_name: str):
-    """Query the B-rep faces of an existing object.
-
-    Returns a list of face dicts with:
-    - face_index (1-based index)
-    - center (CenterOfMass as dict with x, y, z)
-    - area (float)
-    - face_id (opaque pointer string)
-    """
-    doc = _active_doc()
-    obj = doc.getObject(object_name)
-    if obj is None:
-        raise ValueError(f"Object not found: {object_name}")
-
-    if not hasattr(obj, "Shape") or obj.Shape is None:
-        return []
-
-    faces = []
-    for face_index, face in enumerate(obj.Shape.Faces, start=1):
-        center = face.CenterOfMass
-        face_dict = {
-            "face_index": face_index,
-            "center": {"x": center.x, "y": center.y, "z": center.z},
-            "area": face.Area,
-            "face_id": f"{object_name}_face_{face_index}",
-        }
-        faces.append(face_dict)
-
-    return faces
-
-
-def _impl_get_edges(object_name: str):
-    """Query the B-rep edges of an existing object.
-
-    Returns a list of edge dicts with:
-    - edge_index (1-based index)
-    - center (CenterOfMass as dict with x, y, z)
-    - length (float)
-    - edge_id (opaque pointer string)
-    """
-    doc = _active_doc()
-    obj = doc.getObject(object_name)
-    if obj is None:
-        raise ValueError(f"Object not found: {object_name}")
-
-    if not hasattr(obj, "Shape") or obj.Shape is None:
-        return []
-
-    edges = []
-    for edge_index, edge in enumerate(obj.Shape.Edges, start=1):
-        center = edge.CenterOfMass
-        edge_dict = {
-            "edge_index": edge_index,
-            "center": {"x": center.x, "y": center.y, "z": center.z},
-            "length": edge.Length,
-            "edge_id": f"{object_name}_edge_{edge_index}",
-        }
-        edges.append(edge_dict)
-
-    return edges
-
-
 def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float):
     """Apply a fillet to specific edges of an object.
 
@@ -623,17 +544,6 @@ def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float):
 
     _sync(doc)
     return f"Successfully created chamfer '{id}' on {len(edge_refs)} edge(s) of '{target_id}' with size {size}."
-
-
-def _impl_clear_document():
-    """Clear the active FreeCAD document by closing it and creating a new one."""
-    try:
-        if App.ActiveDocument:
-            App.closeDocument(App.ActiveDocument.Name)
-    except Exception:
-        pass
-    App.newDocument("Unnamed")
-    return "Document cleared successfully."
 
 
 def _impl_export_obj(filepath: str):
@@ -853,6 +763,13 @@ def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False):
     return f"Successfully {'cut' if is_cut else 'extruded'} '{id}' from sketch '{sketch_id}' with depth {depth}."
 
 
+# Import topology functions
+
+
+# --------------------------------------------------------------------------- #
+# IMPLEMENTATIONS registry
+# --------------------------------------------------------------------------- #
+
 _IMPLEMENTATIONS = {
     "create_box": _impl_create_box,
     "create_cylinder": _impl_create_cylinder,
@@ -877,6 +794,12 @@ _IMPLEMENTATIONS = {
 # --------------------------------------------------------------------------- #
 # Main-thread executor (QTimer consumer).
 # --------------------------------------------------------------------------- #
+
+
+_WORK_QUEUE: "queue.Queue[tuple]" = queue.Queue()
+_RESULTS: "dict[str, tuple[str, str]]" = {}
+_RESULTS_EVENTS: "dict[str, threading.Event]" = {}
+_RESULTS_LOCK = threading.Lock()
 
 
 def _process_queue():
@@ -961,10 +884,6 @@ def boolean(operation, base_obj, tool_obj, result_name="Cut"):
     return _execute_on_main_thread("boolean", operation, base_obj, tool_obj, result_name)
 
 
-def fillet_edges(object_name, radius):
-    return _execute_on_main_thread("fillet_edges", object_name, radius)
-
-
 def set_param(object_name, param_name, value):
     return _execute_on_main_thread("set_param", object_name, param_name, value)
 
@@ -985,6 +904,10 @@ def get_faces(object_name):
     return _execute_on_main_thread("get_faces", object_name)
 
 
+def get_edges(object_name):
+    return _execute_on_main_thread("get_edges", object_name)
+
+
 def hole(id, face_ref, x, y, diameter, depth=100.0):
     return _execute_on_main_thread("hole", id, face_ref, x, y, diameter, depth)
 
@@ -1003,10 +926,6 @@ def sketch(id, face_ref, shapes):
 
 def extrude(id, sketch_id, depth, is_cut=False):
     return _execute_on_main_thread("extrude", id, sketch_id, depth, is_cut)
-
-
-def get_edges(object_name):
-    return _execute_on_main_thread("get_edges", object_name)
 
 
 def fillet(id, target_id, edge_refs, radius):
@@ -1045,7 +964,6 @@ _HANDLERS = {
 # --------------------------------------------------------------------------- #
 # Server startup
 # --------------------------------------------------------------------------- #
-
 
 _SERVER = None
 
