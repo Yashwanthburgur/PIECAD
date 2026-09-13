@@ -257,12 +257,14 @@ class FreeCADAdapter(CADAdapter):
                 sketch_id = kwargs["sketch_id"]
                 depth = float(kwargs["depth"])
                 is_cut = kwargs.get("is_cut", False)
+                is_solid = kwargs.get("is_solid", True)
                 return str(
                     self._proxy.extrude(
                         str(obj_id),
                         str(sketch_id),
                         depth,
                         is_cut,
+                        is_solid,
                     )
                 )
 

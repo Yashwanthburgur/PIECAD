@@ -79,6 +79,8 @@ class Extrude(OpBase):
     depth: float = Field(gt=0)
     is_cut: bool = Field(
         default=False, description="True = Boolean subtract (cut), False = Boolean add (pad)")
+    is_solid: bool = Field(
+        default=True, description="If True, creates a solid 3D body. If False, creates a hollow surface/shell.")
 
 
 # --- Edge Dressing (Fillet/Chamfer) ---
