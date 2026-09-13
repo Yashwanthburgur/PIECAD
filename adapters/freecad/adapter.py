@@ -8,6 +8,7 @@ a matching XML-RPC method name on a small, synchronous FreeCAD bridge (HOW it is
 actually executed). Core never sees FreeCAD internals.
 """
 
+import json
 from typing import Any, Dict, List
 
 import xmlrpc.client
@@ -159,6 +160,15 @@ class FreeCADAdapter(CADAdapter):
                 width = float(kwargs["width"])
                 height = float(kwargs["height"])
                 origin = kwargs.get("origin", {"x": 0, "y": 0, "z": 0})
+
+                # LLMs sometimes serialize the origin dict as a JSON string.
+                # Normalize it to a dict before calling .get() on it.
+                if isinstance(origin, str):
+                    import ast
+                    try:
+                        origin = ast.literal_eval(origin)
+                    except Exception:
+                        origin = {"x": 0.0, "y": 0.0, "z": 0.0}
 
                 # Create the box
                 result = self._proxy.create_box(

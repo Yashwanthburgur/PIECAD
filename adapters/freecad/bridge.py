@@ -97,6 +97,7 @@ def _sync(doc):
             is_valid = obj.isValid
             if callable(is_valid):
                 if not is_valid():
+                    5
                     raise RuntimeError(
                         f"FreeCAD Kernel Invalid Geometry: Object '{obj.Name}' failed to compute (State: {getattr(obj, 'State', 'Unknown')}).")
             else:
@@ -807,28 +808,17 @@ def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False, i
 
     doc = _active_doc()
     sketch_obj = doc.getObject(sketch_id)
-    if sketch_obj is None:
-        raise ValueError(f"Sketch object not found: {sketch_id}")
+    if not sketch_obj:
+        raise RuntimeError(f"Sketch {sketch_id} not found")
 
-    if not hasattr(sketch_obj, "Shape") or sketch_obj.Shape is None:
-        raise ValueError(f"Sketch has no Shape: {sketch_id}")
-
-    # Get normal vector from sketch placement
-    normal = sketch_obj.Placement.Rotation.Axis
-    if normal is None:
-        normal = FreeCAD.Vector(0, 0, 1)
-
-    # For cuts, reverse normal to go into the material
-    if is_cut:
-        normal = normal * -1.0
-
-    # Extrude vector
-    extrude_vec = normal * float(depth)
-
-    # Perform extrusion
-    extruded_shape = sketch_obj.Shape.extrude(extrude_vec)
+    # Generate the 3D shape directly from the 2D wire
+    extruded_shape = sketch_obj.Shape.extrude(
+        FreeCAD.Vector(0, 0, float(depth)))
 
     if is_cut:
+        extrude_obj = doc.addObject("Part::Feature", f"{id}_tool")
+        extrude_obj.Shape = extruded_shape
+        # ... [keep existing boolean cut logic here]
         # Get target body from sketch property
         if not hasattr(sketch_obj, "TargetBody") or not sketch_obj.TargetBody:
             raise ValueError(
@@ -838,12 +828,6 @@ def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False, i
         target = doc.getObject(target_name)
         if target is None:
             raise ValueError(f"Target body not found: {target_name}")
-
-        # Create tool object from extruded shape (this is the extrusion object)
-        extrude_obj = doc.addObject("Part::Feature", f"{id}_tool")
-        extrude_obj.Shape = extruded_shape
-        # Immediately after the extrusion object is created, enforce solidity flag
-        extrude_obj.Solid = is_solid
 
         # Perform the cut
         cut = doc.addObject("Part::Cut", id)
@@ -862,10 +846,8 @@ def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False, i
 
         result_obj = cut
     else:
-        # Create the extrusion object and immediately enforce the solidity flag
         extrude_obj = doc.addObject("Part::Feature", id)
         extrude_obj.Shape = extruded_shape
-        extrude_obj.Solid = is_solid
         result_obj = extrude_obj
 
     _sync(doc)
