@@ -114,3 +114,36 @@ class Cylinder(OpBase):
     radius: float = Field(gt=0)
     height: float = Field(gt=0)
     origin: Vec3 = Vec3(x=0, y=0, z=0)
+
+
+class LinearPattern(OpBase):
+    op: Literal["pattern_linear"] = "pattern_linear"
+    target_id: str
+    direction: dict
+    distance: float
+    count: int
+
+
+class CircularPattern(OpBase):
+    op: Literal["pattern_circular"] = "pattern_circular"
+    target_id: str
+    axis_origin: dict
+    axis_direction: dict
+    angle: float  # in degrees, e.g., 360.0
+    count: int
+
+
+# Union of all operations for use in the agent
+Operation = Union[
+    Boolean,
+    DeleteFeature,
+    Hole,
+    Sketch,
+    Extrude,
+    Fillet,
+    Chamfer,
+    Box,
+    Cylinder,
+    LinearPattern,
+    CircularPattern,
+]
