@@ -15,7 +15,7 @@ from typing import Any, Dict, List
 import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
-from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell
+from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell, Mate
 
 
 def _parse_dict_arg(arg, default_val):
@@ -140,6 +140,14 @@ class FreeCADAdapter(CADAdapter):
                     "name": "chamfer",
                     "description": "Apply a chamfer to specific edges of an object. Use get_edges first to find the edge_refs.",
                     "parameters": Chamfer.model_json_schema(),
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "mate",
+                    "description": "Mate two independent bodies. 'concentric' aligns the central axes of two cylinders/holes/circular edges; 'coincident' brings two planar faces into flush contact. Use get_faces or get_edges first to find the reference IDs.",
+                    "parameters": Mate.model_json_schema(),
                 }
             },
         ]
@@ -281,6 +289,32 @@ class FreeCADAdapter(CADAdapter):
                         kwargs.get("target_id", ""),
                         f_refs,
                         thick
+                    )
+                )
+
+            elif tool_name == "mate":
+                offset_val = kwargs.get("offset", 0.0)
+                try:
+                    offset_val = float(offset_val)
+                except Exception:
+                    offset_val = 0.0
+
+                flip_val = kwargs.get("flip", False)
+                if isinstance(flip_val, str):
+                    flip_val = flip_val.strip().lower() in ("true", "1", "yes")
+                else:
+                    flip_val = bool(flip_val)
+
+                return str(
+                    self._proxy.mate(
+                        kwargs.get("id") or "mate_op",
+                        str(kwargs.get("mate_type", "concentric")),
+                        str(kwargs.get("moving_target", "")),
+                        str(kwargs.get("moving_ref", "")),
+                        str(kwargs.get("fixed_target", "")),
+                        str(kwargs.get("fixed_ref", "")),
+                        offset_val,
+                        flip_val
                     )
                 )
 

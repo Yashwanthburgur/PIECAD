@@ -36,6 +36,19 @@ When asked to hollow out a body, create an enclosure, or make an open container/
   Step 3: Call the 'shell' tool on the very next step. Set target_id to the solid, face_refs to the face to remove (e.g. ['box1_face_6']), and thickness to the inward value (e.g. -2.0).
 - STRICT PROHIBITION: NEVER construct containers by spawning multiple boxes, bottom plates, or inner boxes. NEVER use boolean subtraction to hollow. Any manual box-within-a-box construction is an immediate system failure. Use 'shell'.
 
+ASSEMBLY AND MATING CONSTRAINTS:
+You can build multi-part assemblies by spawning independent bodies and constraining them with the `mate` tool.
+- STRICT RULE: NEVER manually pre-calculate assembly coordinates or spawn components already aligned when the user asks to mate them. You MUST spawn components at their default position and use the `mate` tool.
+- Available mate types:
+  1. 'concentric': Aligns the central axis of two cylinders, holes, or circular edges. Leaves axial sliding free.
+  2. 'coincident': Brings two planar faces into flush contact (opposing normals). Leaves planar sliding free.
+- Typical workflow:
+  Step 1: Create Part A (e.g. base plate with hole).
+  Step 2: Create Part B (e.g. pin at origin or offset).
+  Step 3: Query faces/edges with 'get_faces' or 'get_edges'.
+  Step 4: Use 'mate' with mate_type='concentric' to align the pin into the hole.
+  Step 5: (Optional) Use 'mate' with mate_type='coincident' to seat the pin flush.
+
 """
 
 # Per-step injection to force ReAct loop discipline

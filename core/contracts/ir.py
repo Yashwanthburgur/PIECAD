@@ -146,6 +146,29 @@ class Shell(OpBase):
         description="Wall thickness in mm. Use negative numbers like -2.0 to hollow inward")
 
 
+class Mate(BaseModel):
+    """Aligns and positions two independent bodies using geometric mates."""
+    id: str = Field(
+        description="Unique identifier for the mate operation, e.g. 'mate_1'")
+    op: Literal["mate"] = Field(
+        default="mate", description="Operation type, must be 'mate'")
+    mate_type: Literal["concentric", "coincident"] = Field(
+        description="'concentric' aligns axes of cylinders/holes; 'coincident' brings two planar faces into flush contact"
+    )
+    moving_target: str = Field(
+        description="Object ID of the part to be moved/transformed")
+    moving_ref: str = Field(
+        description="Face or Edge ID on moving_target, e.g. 'pin_face_1'")
+    fixed_target: str = Field(
+        description="Object ID of the reference part that stays fixed in space")
+    fixed_ref: str = Field(
+        description="Face or Edge ID on fixed_target, e.g. 'base_face_6'")
+    offset: float = Field(
+        default=0.0, description="Offset distance along the mate vector in mm")
+    flip: bool = Field(
+        default=False, description="Flip the alignment direction or face normals")
+
+
 # Union of all operations for use in the agent
 Operation = Union[
     Boolean,
@@ -160,4 +183,5 @@ Operation = Union[
     LinearPattern,
     CircularPattern,
     Shell,
+    Mate,
 ]
