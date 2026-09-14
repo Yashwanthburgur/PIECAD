@@ -54,14 +54,13 @@ class DeleteFeature(OpBase):
 # --- Tier 1 (Core Solid Modeling) ---
 class Hole(OpBase):
     op: Literal["hole"] = "hole"
-    face_ref: FaceRef
-    x: float
-    y: float
+    target_id: str
+    origin: dict
+    direction: dict
     diameter: float = Field(gt=0)
-    depth: Optional[float] = Field(
-        default=None, description="None = through-all")
-    kind: Literal["simple", "counterbore", "countersink", "tapped"] = "simple"
-    thread_spec: Optional[str] = Field(default=None, description="e.g. 'M6x1'")
+    depth: float = Field(gt=0)
+    kind: Literal["simple", "tapped", "counterbore", "countersink"] = "simple"
+    thread_spec: Optional[str] = Field(default=None, description="e.g. 'M6'")
 
 
 # --- Sketch & Extrude (B-rep workflow) ---

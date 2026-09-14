@@ -25,6 +25,9 @@ When modifying an object: Property changes on an unconsumed object modify it in 
 
 FEATURE PATTERNS:
 You have access to `pattern_linear` and `pattern_circular` tools. NEVER manually calculate coordinates to array multiple identical objects (like bolts or holes). Always create a single tool object and use the pattern tools to array it.
+
+MANUFACTURING HOLES:
+When a user asks for a hole, drill, or tapped/threaded hole (e.g., 'M6 tapped hole'), DO NOT use cylinder and boolean subtract manually. ALWAYS use the dedicated `hole` tool. Set the `target_id` to the body being drilled, `kind` to 'tapped', and `thread_spec` to the requested size (e.g., 'M6').
 """
 
 # Per-step injection to force ReAct loop discipline

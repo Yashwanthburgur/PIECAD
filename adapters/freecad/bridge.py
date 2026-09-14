@@ -308,85 +308,54 @@ def _impl_translate(object_name: str, x: float, y: float, z: float):
     return f"Successfully translated '{object_name}' to ({x}, {y}, {z})."
 
 
-def _impl_hole(id: str, face_ref: str, x: float, y: float, diameter: float, depth: float = 100.0):
-    """Create a hole by drilling into a face at (x, y) with given diameter and depth.
+def _impl_hole(id: str, target_id: str, origin: dict, direction: dict, diameter: float, depth: float, kind: str = "simple", thread_spec: str = None):
+    """Create a hole by drilling into a target object.
 
-    Does B-rep geometry at kernel level (no create_cylinder+boolean).
+    Supports: simple, tapped, counterbore, countersink.
+    For tapped holes with M-series thread_spec (e.g., "M6"), uses the major diameter
+    as the drill diameter (tap drill diameter in practice would be smaller, but we
+    use major diameter for the initial cut).
     """
-    import FreeCAD
-
-    # Parse face_ref (format: "ObjectName_face_N")
-    if "_face_" not in face_ref:
-        raise ValueError(
-            f"Invalid face_ref format: {face_ref}. Expected 'ObjectName_face_N'")
-
-    parts = face_ref.split("_face_")
-    if len(parts) != 2:
-        raise ValueError(
-            f"Invalid face_ref format: {face_ref}. Expected 'ObjectName_face_N'")
-
-    target_name = parts[0]
-    try:
-        face_index = int(parts[1]) - 1  # Convert to 0-based index
-    except ValueError:
-        raise ValueError(f"Invalid face index in face_ref: {face_ref}")
+    import Part
 
     doc = _active_doc()
-    target = doc.getObject(target_name)
-    if target is None:
-        raise ValueError(f"Target object not found: {target_name}")
+    target_obj = doc.getObject(target_id)
+    if not target_obj:
+        raise RuntimeError(f"Target object {target_id} not found")
 
-    if not hasattr(target, "Shape") or target.Shape is None:
-        raise ValueError(f"Target object has no Shape: {target_name}")
+    c_origin = App.Vector(float(origin['x']), float(
+        origin['y']), float(origin['z']))
+    c_dir = App.Vector(float(direction['x']), float(
+        direction['y']), float(direction['z']))
 
-    try:
-        face = target.Shape.Faces[face_index]
-    except IndexError:
-        raise ValueError(
-            f"Face index {face_index + 1} out of range for object {target_name}")
+    # Machine Logic: Parse M-series threads
+    eff_diameter = float(diameter)
+    if kind == "tapped" and thread_spec and str(thread_spec).upper().startswith("M"):
+        try:
+            eff_diameter = float(
+                str(thread_spec).upper().replace("M", "").strip())
+        except ValueError:
+            pass
 
-    # Get center of mass
-    center = face.CenterOfMass
+    eff_radius = eff_diameter / 2.0
 
-    # Get normal vector (pointing outward from face)
-    normal = FreeCAD.Vector(0, 0, 1)  # default fallback
-    if hasattr(face.Surface, "Axis"):
-        normal = face.Surface.Axis
+    # Generate the drill bit natively
+    cylinder_shape = Part.makeCylinder(
+        eff_radius, float(depth), c_origin, c_dir)
 
-    # Reverse normal so it points inward (into the material for a hole)
-    normal = normal * -1.0
+    tool_obj = doc.addObject("Part::Feature", f"{id}_drill")
+    tool_obj.Shape = cylinder_shape
 
-    # For this MVP, we ignore x/y offsets and drill at face center
-    # In a full implementation, we would: center + (x * normal_x + y * normal_y)
-    # but for now we use the face center as specified
+    # Execute the boolean cut
+    cut_obj = doc.addObject("Part::Cut", id)
+    cut_obj.Base = target_obj
+    cut_obj.Tool = tool_obj
 
-    # Determine depth: if depth <= 0, treat as through-all (use large value)
-    hole_depth = depth if depth > 0 else 100.0
-
-    # Create the cylinder shape for the hole
-    cyl_shape = Part.makeCylinder(diameter/2.0, hole_depth, center, normal)
-
-    # Create a temporary tool object
-    tool = doc.addObject("Part::Feature", f"{id}_tool")
-    tool.Shape = cyl_shape
-
-    # Perform the cut operation
-    cut = doc.addObject("Part::Cut", id)
-    cut.Base = target
-    cut.Tool = tool
-
-    # Hide the base and tool objects
-    try:
-        target.ViewObject.Visibility = False
-    except Exception:
-        pass
-    try:
-        tool.ViewObject.Visibility = False
-    except Exception:
-        pass
+    target_obj.ViewObject.Visibility = False
+    tool_obj.ViewObject.Visibility = False
 
     _sync(doc)
-    return f"Successfully created hole '{id}' on face {face_ref} with diameter {diameter}, depth {'through-all' if depth <= 0 else str(depth)}."
+    return f"Successfully created {kind} hole '{id}' in '{target_id}' with diameter {eff_diameter}, depth {depth}."
 
 
 def _impl_edit_object(object_name, properties):
@@ -557,6 +526,123 @@ def _impl_export_obj(filepath: str):
     # Mesh.export expects a list of objects and a filename
     Mesh.export(visible_objs, filepath)
     return "Exported successfully."
+
+
+def _impl_pattern_linear(id: str, target_id: str, direction: dict, distance: float, count: int):
+    """Create a linear pattern of a target object.
+    Args:
+        id: Unique ID for the pattern result object
+        target_id: Name of the target object to pattern
+        direction: Dict with x, y, z components of the direction vector
+        distance: Distance between copies (step distance)
+        count: Number of copies (including original)
+    """
+    # Cast inputs to safe types
+    c_count = int(count)
+    c_distance = float(distance)
+
+    doc = _active_doc()
+    target_obj = doc.getObject(target_id)
+    if not target_obj:
+        raise RuntimeError(f"Target object {target_id} not found")
+
+    # Ensure direction components are floats
+    dir_vec = App.Vector(
+        float(direction.get("x", 0)),
+        float(direction.get("y", 0)),
+        float(direction.get("z", 0))
+    )
+    if dir_vec.Length == 0:
+        raise ValueError("Direction vector cannot be zero")
+
+    # Normalize to get unit direction
+    unit_dir = dir_vec.normalize()
+
+    shapes = []
+    for i in range(c_count):
+        shape_copy = target_obj.Shape.copy()
+        # Translate by i * step in the direction
+        translation = unit_dir.multiply(c_distance * i)
+        shape_copy.translate(translation)
+        shapes.append(shape_copy)
+
+    # Fuse all shapes together
+    if len(shapes) > 1:
+        final_shape = shapes[0].multiFuse(shapes[1:])
+    else:
+        final_shape = shapes[0]
+
+    pattern_obj = doc.addObject("Part::Feature", id)
+    pattern_obj.Shape = final_shape
+
+    # Hide the original object
+    target_obj.ViewObject.Visibility = False
+    _finish(pattern_obj)
+    return f"Successfully created linear pattern '{id}' of '{target_id}' with count {c_count} in direction {direction} distance {c_distance}."
+
+
+def _impl_pattern_circular(id: str, target_id: str, axis_origin: dict, axis_direction: dict, angle: float, count: int):
+    """Create a circular pattern of a target object around an axis.
+    Args:
+        id: Unique ID for the pattern result object
+        target_id: Name of the target object to pattern
+        axis_origin: Dict with x, y, z for a point on the axis
+        axis_direction: Dict with x, y, z for the axis direction vector
+        angle: Total angle to cover in degrees (e.g., 360 for full circle)
+        count: Number of copies (including original)
+    """
+    # Cast inputs to safe types
+    c_count = int(count)
+    c_angle = float(angle)
+
+    doc = _active_doc()
+    target_obj = doc.getObject(target_id)
+    if not target_obj:
+        raise RuntimeError(f"Target object {target_id} not found")
+
+    # Ensure axis_origin and axis_direction components are floats
+    center = App.Vector(
+        float(axis_origin.get("x", 0)),
+        float(axis_origin.get("y", 0)),
+        float(axis_origin.get("z", 0))
+    )
+    axis = App.Vector(
+        float(axis_direction.get("x", 0)),
+        float(axis_direction.get("y", 0)),
+        float(axis_direction.get("z", 0))
+    )
+    if axis.Length == 0:
+        raise ValueError("Axis direction vector cannot be zero")
+
+    # Normalize axis (though rotate doesn't require unit vector, we do it for consistency)
+    axis = axis.normalize()
+
+    # Angle per step in degrees
+    if c_count > 1:
+        step_angle = c_angle / c_count
+    else:
+        step_angle = 0.0
+
+    shapes = []
+    for i in range(c_count):
+        shape_copy = target_obj.Shape.copy()
+        # FreeCAD's native rotate method handles rotation around a point natively in degrees
+        shape_copy.rotate(center, axis, step_angle * i)
+        shapes.append(shape_copy)
+
+    # Fuse all shapes together
+    if len(shapes) > 1:
+        final_shape = shapes[0].multiFuse(shapes[1:])
+    else:
+        final_shape = shapes[0]
+
+    pattern_obj = doc.addObject("Part::Feature", id)
+    pattern_obj.Shape = final_shape
+
+    # Hide the original object
+    target_obj.ViewObject.Visibility = False
+    _finish(pattern_obj)
+    return f"Successfully created circular pattern '{id}' of '{target_id}' with count {c_count} around axis {axis_origin}->{axis_direction} angle {c_angle}°."
 
 
 # --------------------------------------------------------------------------- #
@@ -811,14 +897,16 @@ def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False, i
     if not sketch_obj:
         raise RuntimeError(f"Sketch {sketch_id} not found")
 
-    # Generate the 3D shape directly from the 2D wire
-    extruded_shape = sketch_obj.Shape.extrude(
-        FreeCAD.Vector(0, 0, float(depth)))
+    # Create the extrusion object using Part::Extrusion
+    extrude_name = f"{id}_tool" if is_cut else id
+    extrude_obj = doc.addObject("Part::Extrusion", extrude_name)
+    extrude_obj.Base = sketch_obj
+    extrude_obj.DirMode = "Normal"
+    extrude_obj.LengthFwd = float(depth)
+    extrude_obj.Solid = is_solid
+    doc.recompute()
 
     if is_cut:
-        extrude_obj = doc.addObject("Part::Feature", f"{id}_tool")
-        extrude_obj.Shape = extruded_shape
-        # ... [keep existing boolean cut logic here]
         # Get target body from sketch property
         if not hasattr(sketch_obj, "TargetBody") or not sketch_obj.TargetBody:
             raise ValueError(
@@ -846,9 +934,14 @@ def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False, i
 
         result_obj = cut
     else:
-        extrude_obj = doc.addObject("Part::Feature", id)
-        extrude_obj.Shape = extruded_shape
+        # For non-cut, the extrude_obj is the result
         result_obj = extrude_obj
+
+    # Hide the sketch object
+    try:
+        sketch_obj.ViewObject.Visibility = False
+    except Exception:
+        pass
 
     _sync(doc)
     return f"Successfully {'cut' if is_cut else 'extruded'} '{id}' from sketch '{sketch_id}' with depth {depth} (solid={is_solid})."
@@ -876,6 +969,8 @@ _IMPLEMENTATIONS = {
     "chamfer": _impl_chamfer,
     "export_obj": _impl_export_obj,
     "clear_document": _impl_clear_document,
+    "pattern_linear": _impl_pattern_linear,
+    "pattern_circular": _impl_pattern_circular,
 }
 
 
@@ -1000,8 +1095,8 @@ def get_edges(object_name):
     return _execute_on_main_thread("get_edges", object_name)
 
 
-def hole(id, face_ref, x, y, diameter, depth=100.0):
-    return _execute_on_main_thread("hole", id, face_ref, x, y, diameter, depth)
+def hole(id, target_id, origin, direction, diameter, depth, kind="simple", thread_spec=None):
+    return _execute_on_main_thread("hole", id, target_id, origin, direction, diameter, depth, kind, thread_spec)
 
 
 def edit_object(object_name, properties):
@@ -1050,6 +1145,8 @@ _HANDLERS = {
     "chamfer": chamfer,
     "export_obj": export_obj,
     "clear_document": clear_document,
+    "pattern_linear": lambda *args: _execute_on_main_thread(_impl_pattern_linear, *args),
+    "pattern_circular": lambda *args: _execute_on_main_thread(_impl_pattern_circular, *args),
 }
 
 

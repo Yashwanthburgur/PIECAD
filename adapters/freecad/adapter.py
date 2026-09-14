@@ -9,12 +9,24 @@ actually executed). Core never sees FreeCAD internals.
 """
 
 import json
+import ast
 from typing import Any, Dict, List
 
 import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
-from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer
+from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern
+
+
+def _parse_dict_arg(arg, default_val):
+    if isinstance(arg, str):
+        try:
+            return ast.literal_eval(arg)
+        except Exception:
+            return default_val
+    if isinstance(arg, dict):
+        return arg
+    return default_val
 
 
 class FreeCADAdapter(CADAdapter):
@@ -159,16 +171,8 @@ class FreeCADAdapter(CADAdapter):
                 length = float(kwargs["length"])
                 width = float(kwargs["width"])
                 height = float(kwargs["height"])
-                origin = kwargs.get("origin", {"x": 0, "y": 0, "z": 0})
-
-                # LLMs sometimes serialize the origin dict as a JSON string.
-                # Normalize it to a dict before calling .get() on it.
-                if isinstance(origin, str):
-                    import ast
-                    try:
-                        origin = ast.literal_eval(origin)
-                    except Exception:
-                        origin = {"x": 0.0, "y": 0.0, "z": 0.0}
+                origin = _parse_dict_arg(kwargs.get("origin"), {
+                                         "x": 0.0, "y": 0.0, "z": 0.0})
 
                 # Create the box
                 result = self._proxy.create_box(
@@ -188,7 +192,8 @@ class FreeCADAdapter(CADAdapter):
                 obj_id = kwargs["id"]
                 radius = float(kwargs["radius"])
                 height = float(kwargs["height"])
-                origin = kwargs.get("origin", {"x": 0, "y": 0, "z": 0})
+                origin = _parse_dict_arg(kwargs.get("origin"), {
+                                         "x": 0.0, "y": 0.0, "z": 0.0})
 
                 # Create the cylinder
                 result = self._proxy.create_cylinder(
@@ -233,20 +238,26 @@ class FreeCADAdapter(CADAdapter):
 
             if tool_name == "hole":
                 obj_id = kwargs["id"]
-                face_ref = kwargs["face_ref"]
-                x = float(kwargs["x"])
-                y = float(kwargs["y"])
+                target_id = kwargs["target_id"]
+                origin = _parse_dict_arg(kwargs.get("origin"), {
+                                         "x": 0.0, "y": 0.0, "z": 0.0})
+                direction = _parse_dict_arg(kwargs.get("direction"), {
+                    "x": 0.0, "y": 0.0, "z": -1.0})
                 diameter = float(kwargs["diameter"])
-                depth = kwargs.get("depth")
-                depth_val = float(depth) if depth is not None else 100.0
+                depth = float(kwargs["depth"])
+                kind = kwargs.get("kind", "simple")
+                thread_spec = kwargs.get("thread_spec")
+
                 return str(
                     self._proxy.hole(
                         str(obj_id),
-                        str(face_ref),
-                        x,
-                        y,
+                        str(target_id),
+                        origin,
+                        direction,
                         diameter,
-                        depth_val,
+                        depth,
+                        kind,
+                        thread_spec,
                     )
                 )
 
@@ -309,6 +320,45 @@ class FreeCADAdapter(CADAdapter):
                         str(target_id),
                         edge_refs,
                         size,
+                    )
+                )
+
+            if tool_name == "pattern_linear":
+                obj_id = kwargs["id"]
+                target_id = kwargs["target_id"]
+                direction = _parse_dict_arg(kwargs.get("direction"), {
+                                            "x": 1.0, "y": 0.0, "z": 0.0})
+                distance = float(kwargs["distance"])
+                count = int(kwargs["count"])
+
+                return str(
+                    self._proxy.pattern_linear(
+                        str(obj_id),
+                        str(target_id),
+                        direction,
+                        distance,
+                        count,
+                    )
+                )
+
+            if tool_name == "pattern_circular":
+                obj_id = kwargs["id"]
+                target_id = kwargs["target_id"]
+                axis_origin = _parse_dict_arg(kwargs.get("axis_origin"), {
+                                              "x": 0.0, "y": 0.0, "z": 0.0})
+                axis_direction = _parse_dict_arg(kwargs.get("axis_direction"), {
+                                                 "x": 0.0, "y": 0.0, "z": 1.0})
+                angle = float(kwargs["angle"])
+                count = int(kwargs["count"])
+
+                return str(
+                    self._proxy.pattern_circular(
+                        str(obj_id),
+                        str(target_id),
+                        axis_origin,
+                        axis_direction,
+                        angle,
+                        count,
                     )
                 )
 
