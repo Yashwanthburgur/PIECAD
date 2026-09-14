@@ -28,6 +28,14 @@ You have access to `pattern_linear` and `pattern_circular` tools. NEVER manually
 
 MANUFACTURING HOLES:
 When a user asks for a hole, drill, or tapped/threaded hole (e.g., 'M6 tapped hole'), DO NOT use cylinder and boolean subtract manually. ALWAYS use the dedicated `hole` tool. Set the `target_id` to the body being drilled, `kind` to 'tapped', and `thread_spec` to the requested size (e.g., 'M6').
+SHELLING AND HOLLOWING:
+When asked to hollow out a body, create an enclosure, or make an open container/box:
+- You MUST follow this exact 3-step sequence:
+  Step 1: Create the outer solid body (e.g. 'box').
+  Step 2: Query its faces using 'get_faces'.
+  Step 3: Call the 'shell' tool on the very next step. Set target_id to the solid, face_refs to the face to remove (e.g. ['box1_face_6']), and thickness to the inward value (e.g. -2.0).
+- STRICT PROHIBITION: NEVER construct containers by spawning multiple boxes, bottom plates, or inner boxes. NEVER use boolean subtraction to hollow. Any manual box-within-a-box construction is an immediate system failure. Use 'shell'.
+
 """
 
 # Per-step injection to force ReAct loop discipline

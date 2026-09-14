@@ -1,4 +1,4 @@
-from typing import Literal, Union, Annotated, Optional
+from typing import Literal, Union, Annotated, Optional, List
 from pydantic import BaseModel, Field
 
 
@@ -132,6 +132,20 @@ class CircularPattern(OpBase):
     count: int
 
 
+class Shell(OpBase):
+    """Hollows out a solid 3D body into an open thin-walled container or enclosure."""
+    id: str = Field(
+        description="Unique identifier for the shell operation, e.g., 'shell_container'")
+    op: Literal["shell"] = Field(
+        default="shell", description="Operation type, must be 'shell'")
+    target_id: str = Field(
+        description="The ID of the solid object to hollow out, e.g., 'box1'")
+    face_refs: List[str] = Field(
+        description="List of face IDs to remove/leave open, e.g., ['box1_face_6'] for an open top")
+    thickness: float = Field(
+        description="Wall thickness in mm. Use negative numbers like -2.0 to hollow inward")
+
+
 # Union of all operations for use in the agent
 Operation = Union[
     Boolean,
@@ -145,4 +159,5 @@ Operation = Union[
     Cylinder,
     LinearPattern,
     CircularPattern,
+    Shell,
 ]

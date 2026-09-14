@@ -947,6 +947,56 @@ def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False, i
     return f"Successfully {'cut' if is_cut else 'extruded'} '{id}' from sketch '{sketch_id}' with depth {depth} (solid={is_solid})."
 
 
+def _impl_shell(id, target_id, face_refs, thickness):
+    doc = App.ActiveDocument
+    target_obj = doc.getObject(target_id)
+    if not target_obj:
+        raise RuntimeError(f"Target object {target_id} not found")
+
+    shape = target_obj.Shape
+    if not hasattr(shape, "Faces") or len(shape.Faces) == 0:
+        raise RuntimeError(f"Target object {target_id} has no valid geometry")
+
+    # Map face_refs (e.g. 'box1_face_6', 'Face6', or integer '6') to Part.Face objects
+    faces_to_remove = []
+    for f_ref in face_refs:
+        f_str = str(f_ref).strip()
+        idx = None
+        if "_" in f_str:
+            parts = f_str.split("_")
+            if parts[-1].isdigit():
+                idx = int(parts[-1]) - 1
+        elif f_str.lower().startswith("face"):
+            digits = "".join(filter(str.isdigit, f_str))
+            if digits:
+                idx = int(digits) - 1
+        elif f_str.isdigit():
+            idx = int(f_str) - 1
+
+        if idx is not None and 0 <= idx < len(shape.Faces):
+            faces_to_remove.append(shape.Faces[idx])
+
+    thick_val = float(thickness)
+
+    # Execute OCC B-Rep makeThickness with automatic normal fallback
+    try:
+        thick_shape = shape.makeThickness(faces_to_remove, thick_val, 1e-3)
+    except Exception as err1:
+        try:
+            thick_shape = shape.makeThickness(
+                faces_to_remove, -thick_val, 1e-3)
+        except Exception as err2:
+            raise RuntimeError(
+                f"B-Rep makeThickness failed ({thick_val}mm): {err1} | Fallback failed: {err2}")
+
+    shell_obj = doc.addObject("Part::Feature", id)
+    shell_obj.Shape = thick_shape
+
+    target_obj.ViewObject.Visibility = False
+    doc.recompute()
+    return _sync(doc)
+
+
 # --------------------------------------------------------------------------- #
 # IMPLEMENTATIONS registry
 # --------------------------------------------------------------------------- #
@@ -971,6 +1021,7 @@ _IMPLEMENTATIONS = {
     "clear_document": _impl_clear_document,
     "pattern_linear": _impl_pattern_linear,
     "pattern_circular": _impl_pattern_circular,
+    "shell": _impl_shell,
 }
 
 
@@ -1147,6 +1198,7 @@ _HANDLERS = {
     "clear_document": clear_document,
     "pattern_linear": lambda *args: _execute_on_main_thread(_impl_pattern_linear, *args),
     "pattern_circular": lambda *args: _execute_on_main_thread(_impl_pattern_circular, *args),
+    "shell": lambda *args: _execute_on_main_thread(_IMPLEMENTATIONS["shell"], *args),
 }
 
 

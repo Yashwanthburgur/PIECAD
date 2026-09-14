@@ -15,7 +15,7 @@ from typing import Any, Dict, List
 import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
-from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern
+from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell
 
 
 def _parse_dict_arg(arg, default_val):
@@ -258,6 +258,29 @@ class FreeCADAdapter(CADAdapter):
                         depth,
                         kind,
                         thread_spec,
+                    )
+                )
+
+            if tool_name == "shell":
+                f_refs = kwargs.get("face_refs", [])
+                if isinstance(f_refs, str):
+                    import ast
+                    try:
+                        f_refs = ast.literal_eval(f_refs)
+                    except Exception:
+                        f_refs = []
+                thick = kwargs.get("thickness", -1.0)
+                try:
+                    thick = float(thick)
+                except Exception:
+                    thick = -1.0
+                shell_id = kwargs.get("id") or "shell_op"
+                return str(
+                    self._proxy.shell(
+                        shell_id,
+                        kwargs.get("target_id", ""),
+                        f_refs,
+                        thick
                     )
                 )
 
