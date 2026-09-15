@@ -40,7 +40,8 @@
       },
       {
         "condition": "dag_children_of_cut",
-        "expected_children": ["Part::Box", "Part::Cylinder"]
+        "expected_children": ["Part::Box", "Part::Cylinder"],
+        "expected_substrings": ["box", "cylinder"]
       }
     ]
   },
@@ -56,6 +57,35 @@
     ]
   },
   {
+    "id": "complex_flange",
+    "name": "Complex Flange (11+ Steps)",
+    "prompt": "Make a base plate 100x100x10. Put a hole in the center with radius 20. Then chamfer the 4 vertical outer edges by 5mm.",
+    "expected_state": [
+      {
+        "condition": "exists_type",
+        "type": "Part::Box",
+        "properties": {
+          "Length": 100,
+          "Width": 100,
+          "Height": 10
+        }
+      },
+      {
+        "condition": "exists_type",
+        "type": "Part::Cut"
+      },
+      {
+        "condition": "dag_children_of_cut",
+        "expected_children": ["Part::Box", "Part::Cylinder"],
+        "expected_substrings": ["box", "cylinder"]
+      },
+      {
+        "condition": "exists_type",
+        "type": "Part::Chamfer"
+      }
+    ]
+  },
+  {
     "id": "semantic_sketch",
     "name": "Semantic Sketch",
     "prompt": "Make a box 50x50x10. On the top face, sketch a 10x10 rectangle and extrude it by 20.",
@@ -66,5 +96,20 @@
         "description": "Extrusion result should be a Part::Feature"
       }
     ]
+  },
+  {
+    "name": "shell_enclosure",
+    "prompt": "Create a box 80x50x30. Query faces, find the top face, and shell it inward by 2mm.",
+    "expected_tools_called": ["box", "get_faces", "shell"]
+  },
+  {
+    "name": "mate_concentric",
+    "prompt": "Create a base with a hole. Create a pin. Mate the pin concentrically into the hole.",
+    "expected_tools_called": ["box", "hole", "cylinder", "get_faces", "mate"]
+  },
+  {
+    "name": "pattern_bolt_circle",
+    "prompt": "Create a base plate, put a hole in it, and pattern that hole 6 times circularly.",
+    "expected_tools_called": ["box", "hole", "pattern_circular"]
   }
 ]
