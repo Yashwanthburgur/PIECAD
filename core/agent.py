@@ -132,6 +132,11 @@ class CADAgent:
         Short-term scratchpad (local variable): Stores ReAct loop internals (tool calls, results).
         The scratchpad is discarded after each handle_message call, keeping history clean.
         """
+        # Prevent unbounded context growth (keep last 20 messages max)
+        MAX_HISTORY = 20
+        if len(self.history) > MAX_HISTORY:
+            self.history = self.history[-MAX_HISTORY:]
+
         # Append user message to long-term history
         self.history.append({"role": "user", "content": user_message.strip()})
 
