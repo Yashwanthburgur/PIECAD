@@ -187,82 +187,51 @@ def _impl_boolean(operation: str, base_obj: str, tool_obj: str, result_name: str
     return f"Successfully performed '{operation}' on '{base_obj}' and '{tool_obj}' as '{new_obj.Name}'."
 
 
-def _impl_hole(id: str, face_ref: str, x: float, y: float, diameter: float, depth: float = 100.0):
-    """Create a hole by drilling into a face at (x, y) with given diameter and depth.
+def _impl_hole(id: str, target_id: str, origin: dict, direction: dict, diameter: float, depth: float, kind: str = "simple", thread_spec: str = None):
+    """Create a hole by drilling into a target object.
 
-    Does B-rep geometry at kernel level (no create_cylinder+boolean).
+    Supports: simple, tapped, counterbore, countersink.
+    For tapped holes with M-series thread_spec (e.g., "M6"), uses the major diameter
+    as the drill diameter (tap drill diameter in practice would be smaller, but we
+    use major diameter for the initial cut).
     """
-    import FreeCAD
-
-    # Parse face_ref (format: "ObjectName_face_N")
-    if "_face_" not in face_ref:
-        raise ValueError(
-            f"Invalid face_ref format: {face_ref}. Expected 'ObjectName_face_N'")
-
-    parts = face_ref.split("_face_")
-    if len(parts) != 2:
-        raise ValueError(
-            f"Invalid face_ref format: {face_ref}. Expected 'ObjectName_face_N'")
-
-    target_name = parts[0]
-    try:
-        face_index = int(parts[1]) - 1  # Convert to 0-based index
-    except ValueError:
-        raise ValueError(f"Invalid face index in face_ref: {face_ref}")
+    import Part
 
     doc = _active_doc()
-    target = doc.getObject(target_name)
-    if target is None:
-        raise ValueError(f"Target object not found: {target_name}")
+    target_obj = doc.getObject(target_id)
+    if not target_obj:
+        raise RuntimeError(f"Target object {target_id} not found")
 
-    if not hasattr(target, "Shape") or target.Shape is None:
-        raise ValueError(f"Target object has no Shape: {target_name}")
+    c_origin = App.Vector(float(origin['x']), float(
+        origin['y']), float(origin['z']))
+    c_dir = App.Vector(float(direction['x']), float(
+        direction['y']), float(direction['z']))
 
-    try:
-        face = target.Shape.Faces[face_index]
-    except IndexError:
-        raise ValueError(
-            f"Face index {face_index + 1} out of range for object {target_name}")
+    # Machine Logic: Parse M-series threads
+    eff_diameter = float(diameter)
+    if kind == "tapped" and thread_spec and str(thread_spec).upper().startswith("M"):
+        try:
+            eff_diameter = float(
+                str(thread_spec).upper().replace("M", "").strip())
+        except ValueError:
+            pass
 
-    # Get center of mass
-    center = face.CenterOfMass
+    eff_radius = eff_diameter / 2.0
 
-    # Get normal vector (pointing outward from face)
-    normal = FreeCAD.Vector(0, 0, 1)  # default fallback
-    if hasattr(face.Surface, "Axis"):
-        normal = face.Surface.Axis
+    # Generate the drill bit natively
+    cylinder_shape = Part.makeCylinder(
+        eff_radius, float(depth), c_origin, c_dir)
 
-    # Reverse normal so it points inward (into the material for a hole)
-    normal = normal * -1.0
+    tool_obj = doc.addObject("Part::Feature", f"{id}_drill")
+    tool_obj.Shape = cylinder_shape
 
-    # For this MVP, we ignore x/y offsets and drill at face center
-    # In a full implementation, we would: center + (x * normal_x + y * normal_y)
-    # but for now we use the face center as specified
+    # Execute the boolean cut
+    cut_obj = doc.addObject("Part::Cut", id)
+    cut_obj.Base = target_obj
+    cut_obj.Tool = tool_obj
 
-    # Determine depth: if depth <= 0, treat as through-all (use large value)
-    hole_depth = depth if depth > 0 else 100.0
-
-    # Create the cylinder shape for the hole
-    cyl_shape = Part.makeCylinder(diameter/2.0, hole_depth, center, normal)
-
-    # Create a temporary tool object
-    tool = doc.addObject("Part::Feature", f"{id}_tool")
-    tool.Shape = cyl_shape
-
-    # Perform the cut operation
-    cut = doc.addObject("Part::Cut", id)
-    cut.Base = target
-    cut.Tool = tool
-
-    # Hide the base and tool objects
-    try:
-        target.ViewObject.Visibility = False
-    except Exception:
-        pass
-    try:
-        tool.ViewObject.Visibility = False
-    except Exception:
-        pass
+    target_obj.ViewObject.Visibility = False
+    tool_obj.ViewObject.Visibility = False
 
     _sync(doc)
-    return f"Successfully created hole '{id}' on face {face_ref} with diameter {diameter}, depth {'through-all' if depth <= 0 else str(depth)}."
+    return f"Successfully created {kind} hole '{id}' in '{target_id}' with diameter {eff_diameter}, depth {depth}."

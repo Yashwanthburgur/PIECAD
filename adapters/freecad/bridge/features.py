@@ -223,3 +223,58 @@ def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float):
 
     _sync(doc)
     return f"Successfully created chamfer '{id}' on {len(edge_refs)} edge(s) of '{target_id}' with size {size}."
+
+
+def _impl_shell(id, target_id, face_refs, thickness):
+    """Hollow out a solid into a thin-walled container, removing the given faces.
+
+    Uses the native OpenCASCADE B-Rep `makeThickness` operation with an
+    automatic normal-sign fallback for robustness.
+    """
+    doc = App.ActiveDocument
+    target_obj = doc.getObject(target_id)
+    if not target_obj:
+        raise RuntimeError(f"Target object {target_id} not found")
+
+    shape = target_obj.Shape
+    if not hasattr(shape, "Faces") or len(shape.Faces) == 0:
+        raise RuntimeError(f"Target object {target_id} has no valid geometry")
+
+    # Map face_refs (e.g. 'box1_face_6', 'Face6', or integer '6') to Part.Face objects
+    faces_to_remove = []
+    for f_ref in face_refs:
+        f_str = str(f_ref).strip()
+        idx = None
+        if "_" in f_str:
+            parts = f_str.split("_")
+            if parts[-1].isdigit():
+                idx = int(parts[-1]) - 1
+        elif f_str.lower().startswith("face"):
+            digits = "".join(filter(str.isdigit, f_str))
+            if digits:
+                idx = int(digits) - 1
+        elif f_str.isdigit():
+            idx = int(f_str) - 1
+
+        if idx is not None and 0 <= idx < len(shape.Faces):
+            faces_to_remove.append(shape.Faces[idx])
+
+    thick_val = float(thickness)
+
+    # Execute OCC B-Rep makeThickness with automatic normal fallback
+    try:
+        thick_shape = shape.makeThickness(faces_to_remove, thick_val, 1e-3)
+    except Exception as err1:
+        try:
+            thick_shape = shape.makeThickness(
+                faces_to_remove, -thick_val, 1e-3)
+        except Exception as err2:
+            raise RuntimeError(
+                f"B-Rep makeThickness failed ({thick_val}mm): {err1} | Fallback failed: {err2}")
+
+    shell_obj = doc.addObject("Part::Feature", id)
+    shell_obj.Shape = thick_shape
+
+    target_obj.ViewObject.Visibility = False
+    doc.recompute()
+    return _sync(doc)

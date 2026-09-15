@@ -15,7 +15,7 @@ from typing import Any, Dict, List
 import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
-from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell, Mate
+from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell, Mate, GetMassProperties, GetBOM
 
 
 def _parse_dict_arg(arg, default_val):
@@ -172,6 +172,22 @@ class FreeCADAdapter(CADAdapter):
                     "name": "pattern_circular",
                     "description": "Create a circular array of copies of an existing object around an axis (e.g. a bolt circle). NEVER manually calculate coordinates; use this tool to array the object around the axis.",
                     "parameters": CircularPattern.model_json_schema(),
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_mass_properties",
+                    "description": "Get engineering mass properties of a solid body: volume, center of mass, and bounding box. Useful for validating design dimensions and weight distribution.",
+                    "parameters": GetMassProperties.model_json_schema(),
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_bom",
+                    "description": "Generate a Bill of Materials: a list of all visible, distinct solid parts currently in the assembly document, with each part's name and volume.",
+                    "parameters": GetBOM.model_json_schema(),
                 }
             },
         ]
@@ -441,6 +457,19 @@ class FreeCADAdapter(CADAdapter):
                         angle,
                         count,
                     )
+                )
+
+            if tool_name == "get_mass_properties":
+                return str(
+                    self._proxy.get_mass_properties(
+                        kwargs.get("id", "mass"),
+                        kwargs.get("object_name", ""),
+                    )
+                )
+
+            if tool_name == "get_bom":
+                return str(
+                    self._proxy.get_bom(kwargs.get("id", "bom"))
                 )
 
             raise NotImplementedError(

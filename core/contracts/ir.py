@@ -169,6 +169,19 @@ class Mate(BaseModel):
         default=False, description="Flip the alignment direction or face normals")
 
 
+class GetMassProperties(BaseModel):
+    """Calculates volume, center of mass, and bounding box for a solid body."""
+    id: str = Field(description="Unique ID for this query")
+    op: Literal["get_mass_properties"] = Field(default="get_mass_properties")
+    object_name: str = Field(description="The ID of the object to analyze")
+
+
+class GetBOM(BaseModel):
+    """Generates a Bill of Materials (list of all independent, visible solid parts in the assembly)."""
+    id: str = Field(description="Unique ID for this query")
+    op: Literal["get_bom"] = Field(default="get_bom")
+
+
 # Union of all operations for use in the agent
 Operation = Union[
     Boolean,
@@ -184,4 +197,6 @@ Operation = Union[
     CircularPattern,
     Shell,
     Mate,
+    GetMassProperties,
+    GetBOM,
 ]

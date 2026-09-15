@@ -128,3 +128,46 @@ def _impl_get_edges(obj_name: str):
         })
 
     return edges_data
+
+
+def _impl_get_mass_properties(id, object_name):
+    """Calculate engineering mass properties (volume, center of mass, bounding
+    box) for a specific solid body. All floats are rounded to 3 decimals to
+    keep LLM context small."""
+    doc = App.ActiveDocument
+    obj = doc.getObject(object_name)
+    if not obj or not hasattr(obj, "Shape") or obj.Shape.isNull():
+        raise RuntimeError(
+            f"Object {object_name} not found or has no valid shape.")
+
+    shape = obj.Shape
+    return {
+        "status": "success",
+        "volume": round(float(shape.Volume), 3),
+        "center_of_mass": {
+            "x": round(float(shape.CenterOfMass.x), 3),
+            "y": round(float(shape.CenterOfMass.y), 3),
+            "z": round(float(shape.CenterOfMass.z), 3)
+        },
+        "bounding_box": {
+            "XMin": round(float(shape.BoundBox.XMin), 3), "XMax": round(float(shape.BoundBox.XMax), 3),
+            "YMin": round(float(shape.BoundBox.YMin), 3), "YMax": round(float(shape.BoundBox.YMax), 3),
+            "ZMin": round(float(shape.BoundBox.ZMin), 3), "ZMax": round(float(shape.BoundBox.ZMax), 3)
+        }
+    }
+
+
+def _impl_get_bom(id):
+    """Generate a Bill of Materials: all visible, distinct solid parts in the
+    active document, each with its name and volume (rounded to 3 decimals)."""
+    doc = App.ActiveDocument
+    bom = []
+    # Iterate through objects. Count only visible objects with a valid solid shape.
+    for obj in doc.Objects:
+        if hasattr(obj, "Shape") and not obj.Shape.isNull() and hasattr(obj, "ViewObject"):
+            if obj.ViewObject and obj.ViewObject.Visibility:
+                bom.append({
+                    "name": obj.Name,
+                    "volume": round(float(obj.Shape.Volume), 3)
+                })
+    return {"status": "success", "parts": bom}

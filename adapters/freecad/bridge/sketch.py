@@ -216,7 +216,7 @@ def _impl_sketch(id: str, face_ref: str, shapes: list):
     return f"Successfully created sketch '{id}' on face {face_ref} with {len(shapes)} shape(s)."
 
 
-def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False):
+def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False, is_solid: bool = True):
     """Extrude a sketch to create a solid or a cut.
 
     Args:
@@ -224,31 +224,23 @@ def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False):
         sketch_id: ID of the sketch to extrude
         depth: Extrusion depth (positive)
         is_cut: If True, perform boolean cut against TargetBody; if False, create solid
+        is_solid: If True, creates a solid 3D body. If False, creates a hollow surface/shell.
     """
     import FreeCAD
 
     doc = _active_doc()
     sketch_obj = doc.getObject(sketch_id)
-    if sketch_obj is None:
-        raise ValueError(f"Sketch object not found: {sketch_id}")
+    if not sketch_obj:
+        raise RuntimeError(f"Sketch {sketch_id} not found")
 
-    if not hasattr(sketch_obj, "Shape") or sketch_obj.Shape is None:
-        raise ValueError(f"Sketch has no Shape: {sketch_id}")
-
-    # Get normal vector from sketch placement
-    normal = sketch_obj.Placement.Rotation.Axis
-    if normal is None:
-        normal = FreeCAD.Vector(0, 0, 1)
-
-    # For cuts, reverse normal to go into the material
-    if is_cut:
-        normal = normal * -1.0
-
-    # Extrude vector
-    extrude_vec = normal * float(depth)
-
-    # Perform extrusion
-    extruded_shape = sketch_obj.Shape.extrude(extrude_vec)
+    # Create the extrusion object using Part::Extrusion
+    extrude_name = f"{id}_tool" if is_cut else id
+    extrude_obj = doc.addObject("Part::Extrusion", extrude_name)
+    extrude_obj.Base = sketch_obj
+    extrude_obj.DirMode = "Normal"
+    extrude_obj.LengthFwd = float(depth)
+    extrude_obj.Solid = is_solid
+    doc.recompute()
 
     if is_cut:
         # Get target body from sketch property
@@ -261,14 +253,10 @@ def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False):
         if target is None:
             raise ValueError(f"Target body not found: {target_name}")
 
-        # Create tool object from extruded shape
-        tool = doc.addObject("Part::Feature", f"{id}_tool")
-        tool.Shape = extruded_shape
-
         # Perform the cut
         cut = doc.addObject("Part::Cut", id)
         cut.Base = target
-        cut.Tool = tool
+        cut.Tool = extrude_obj
 
         # Hide the base and tool objects
         try:
@@ -276,16 +264,20 @@ def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False):
         except Exception:
             pass
         try:
-            tool.ViewObject.Visibility = False
+            extrude_obj.ViewObject.Visibility = False
         except Exception:
             pass
 
         result_obj = cut
     else:
-        # Create solid feature
-        solid = doc.addObject("Part::Feature", id)
-        solid.Shape = extruded_shape
-        result_obj = solid
+        # For non-cut, the extrude_obj is the result
+        result_obj = extrude_obj
+
+    # Hide the sketch object
+    try:
+        sketch_obj.ViewObject.Visibility = False
+    except Exception:
+        pass
 
     _sync(doc)
-    return f"Successfully {'cut' if is_cut else 'extruded'} '{id}' from sketch '{sketch_id}' with depth {depth}."
+    return f"Successfully {'cut' if is_cut else 'extruded'} '{id}' from sketch '{sketch_id}' with depth {depth} (solid={is_solid})."
