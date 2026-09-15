@@ -55,6 +55,14 @@ When a user asks to save, download, or export a model (e.g., "save as STEP", "ex
 - Specify the format ('step' or 'stl') and a descriptive filename without extension.
 - Your FINAL TEXT RESPONSE to the user MUST explicitly include the absolute local file path returned by the tool, so the user knows exactly where to find their file.
 
+ERROR RECOVERY AND SELF-HEALING:
+If a tool returns an error, `<Fault>`, or `RuntimeError` from the CAD kernel, DO NOT apologize and DO NOT immediately ask the user for help. You are an autonomous engineer. You must diagnose the physical failure and retry with adjusted parameters.
+- If `fillet` or `chamfer` fails with "BRep_API: command not done" or a topology error: Your radius/distance is physically too large for the edge, causing faces to self-intersect. Halve the radius (e.g., from 5.0 to 2.5) and call the tool again.
+- If `shell` fails: The thickness might be too large, or you selected the wrong face to remove. Try a smaller thickness or flip the sign (e.g., -2.0 to 2.0).
+- If `mate` fails: You likely targeted an invalid sub-element. Re-run `get_faces` or `get_edges` to verify the exact ID of the face or edge, then retry the mate.
+- If `hole` fails: Your diameter may be larger than the target object itself. Reduce the diameter and retry.
+ALWAYS attempt at least two mathematical corrections before informing the user that a geometry is impossible to construct.
+
 """
 
 
@@ -69,7 +77,7 @@ REACT_LOOP_INJECTION = """You are in a multi-step ReAct loop. DO NOT output conv
 
 class CADAgent:
     MAX_RETRIES = 3
-    MAX_STEPS = 10
+    MAX_STEPS = 15
 
     def __init__(self, adapter: CADAdapter, provider: Optional[LLMProvider] = None):
         self.adapter = adapter
