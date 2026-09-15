@@ -8,20 +8,7 @@ import json
 import FreeCAD as App
 import FreeCADGui as Gui
 
-
-def _active_doc():
-    """Get or create the active FreeCAD document."""
-    doc = App.ActiveDocument
-    if doc is None:
-        doc = App.newDocument("PieCAD_Model")
-    # Ensure the document is the GUI-active one too (so its view is shown).
-    try:
-        gui_doc = Gui.getDocument(doc.Name)
-        if gui_doc is not None:
-            Gui.setActiveDocument(doc)
-    except Exception:
-        pass
-    return doc
+from ._common import _active_doc
 
 
 def _impl_get_state():

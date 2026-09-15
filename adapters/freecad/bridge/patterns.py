@@ -8,30 +8,7 @@ import FreeCAD as App
 import FreeCADGui as Gui
 import Part
 
-
-def _active_doc():
-    """Get or create the active FreeCAD document."""
-    doc = App.ActiveDocument
-    if doc is None:
-        doc = App.newDocument("PieCAD_Model")
-    # Ensure the document is the GUI-active one too (so its view is shown).
-    try:
-        gui_doc = Gui.getDocument(doc.Name)
-        if gui_doc is not None:
-            Gui.setActiveDocument(doc)
-    except Exception:
-        pass
-    return doc
-
-
-def _finish(obj):
-    """Finish operation: recompute the object and fit view."""
-    obj.recompute()
-    try:
-        Gui.SendMsgToActiveView("ViewFit")
-    except Exception:
-        pass
-    return obj
+from ._common import _active_doc, _finish
 
 
 def _impl_pattern_linear(id: str, target_id: str, direction: dict, distance: float, count: int):
