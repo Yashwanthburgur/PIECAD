@@ -150,6 +150,30 @@ class FreeCADAdapter(CADAdapter):
                     "parameters": Mate.model_json_schema(),
                 }
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "shell",
+                    "description": "Hollow out a solid body into a thin-walled container/enclosure by removing the specified faces. Use get_faces first to find the face_refs to leave open. Use a negative thickness (e.g. -2.0) to shell inward.",
+                    "parameters": Shell.model_json_schema(),
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "pattern_linear",
+                    "description": "Create a linear array of copies of an existing object along a direction vector with a fixed step distance. NEVER manually create duplicate objects; use this tool to array them.",
+                    "parameters": LinearPattern.model_json_schema(),
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "pattern_circular",
+                    "description": "Create a circular array of copies of an existing object around an axis (e.g. a bolt circle). NEVER manually calculate coordinates; use this tool to array the object around the axis.",
+                    "parameters": CircularPattern.model_json_schema(),
+                }
+            },
         ]
 
     # ------------------------------------------------------------------ #
