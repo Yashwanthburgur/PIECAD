@@ -1,35 +1,35 @@
 """PieCAD FreeCAD XML-RPC Bridge (main-thread execution).
 
-FreeCAD is NOT thread-safe: creating documents/objects and recomputing the 3D
-Coin3D scene must happen on the GUI (main) thread. XML-RPC servers, however,
-dispatch each request on a worker thread.
+   FreeCAD is NOT thread-safe: creating documents/objects and recomputing the 3D
+   Coin3D scene must happen on the GUI (main) thread. XML-RPC servers, however,
+   dispatch each request on a worker thread.
 
-This bridge therefore uses a **two-thread design**:
+   This bridge therefore uses a **two-thread design**:
 
-1. The XML-RPC server (worker thread) receives a call, enqueues it, then BLOCKS
-   waiting for the result.
-2. A QTimer on the FreeCAD main thread drains the queue and actually performs
-   the document/object work, then signals the waiting worker.
+   1. The XML-RPC server (worker thread) receives a call, enqueues it, then BLOCKS
+      waiting for the result.
+   2. A QTimer on the FreeCAD main thread drains the queue and actually performs
+      the document/object work, then signals the waiting worker.
 
-This keeps the synchronous XML-RPC contract while guaranteeing every FreeCAD
-operation (`doc.addObject`, `doc.recompute`, `Gui.SendMsgToActiveView`)
-runs on the main thread — so objects render immediately.
+   This keeps the synchronous XML-RPC contract while guaranteeing every FreeCAD
+   operation (`doc.addObject`, `doc.recompute`, `Gui.SendMsgToActiveView`)
+   runs on the main thread — so objects render immediately.
 
-Usage (paste into the FreeCAD Python console):
+   Usage (paste into the FreeCAD Python console):
 
-    import sys, threading
-    sys.path.insert(0, str(PROJECT_ROOT / "adapters/freecad"))
-    import bridge
+       import sys, threading
+       sys.path.insert(0, str(PROJECT_ROOT / "adapters/freecad"))
+       import bridge
 
-    bridge.install_main_thread_processor()   # MUST run on the main/console thread
+       bridge.install_main_thread_processor()   # MUST run on the main/console thread
 
-    t = threading.Thread(target=lambda: bridge.start(port=9876), daemon=True)
-    t.start()
+       t = threading.Thread(target=lambda: bridge.start(port=9876), daemon=True)
+       t.start()
 
-    panel_path = PROJECT_ROOT / "ui/freecad_panel.py"
-    with open(panel_path, encoding="utf-8") as f:
-        exec(f.read)
-"""
+       panel_path = PROJECT_ROOT / "ui/freecad_panel.py"
+       with open(panel_path, encoding="utf-8") as f:
+           exec(f.read)
+   """
 
 import json
 import xmlrpc.server
@@ -68,6 +68,7 @@ from .features import _impl_fillet, _impl_chamfer, _impl_shell
 from .sketch import _impl_sketch, _impl_extrude
 from .patterns import _impl_pattern_linear, _impl_pattern_circular
 from .assembly import _impl_mate
+from .export import _impl_export_model
 
 # Dynamically resolve project root (two levels up from this file's directory)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -303,6 +304,7 @@ _IMPLEMENTATIONS = {
     "mate": _impl_mate,
     "get_mass_properties": _impl_get_mass_properties,
     "get_bom": _impl_get_bom,
+    "export_model": _impl_export_model,
 }
 
 
@@ -483,6 +485,10 @@ def get_bom(id):
     return _execute_on_main_thread("get_bom", id)
 
 
+def export_model(id, format_type, filepath):
+    return _execute_on_main_thread("export_model", id, format_type, filepath)
+
+
 _HANDLERS = {
     "create_box": create_box,
     "create_cylinder": create_cylinder,
@@ -507,6 +513,7 @@ _HANDLERS = {
     "mate": mate,
     "get_mass_properties": get_mass_properties,
     "get_bom": get_bom,
+    "export_model": export_model,
 }
 
 

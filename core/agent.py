@@ -49,7 +49,14 @@ You can build multi-part assemblies by spawning independent bodies and constrain
   Step 4: Use 'mate' with mate_type='concentric' to align the pin into the hole.
   Step 5: (Optional) Use 'mate' with mate_type='coincident' to seat the pin flush.
 
+EXPORTING FILES:
+When a user asks to save, download, or export a model (e.g., "save as STEP", "export to STL", "download the model"), you MUST use the `export` tool.
+- The `export` tool saves the current visible assembly to a file in the project's exports/ folder.
+- Specify the format ('step' or 'stl') and a descriptive filename without extension.
+- Your FINAL TEXT RESPONSE to the user MUST explicitly include the absolute local file path returned by the tool, so the user knows exactly where to find their file.
+
 """
+
 
 # Per-step injection to force ReAct loop discipline
 REACT_LOOP_INJECTION = """You are in a multi-step ReAct loop. DO NOT output conversational text until you have completed ALL steps of the user's request.

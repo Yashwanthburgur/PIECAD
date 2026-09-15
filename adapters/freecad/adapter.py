@@ -10,12 +10,14 @@ actually executed). Core never sees FreeCAD internals.
 
 import json
 import ast
+import re
+from pathlib import Path
 from typing import Any, Dict, List
 
 import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
-from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell, Mate, GetMassProperties, GetBOM
+from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell, Mate, GetMassProperties, GetBOM, ExportModel
 
 
 def _parse_dict_arg(arg, default_val):
@@ -188,6 +190,14 @@ class FreeCADAdapter(CADAdapter):
                     "name": "get_bom",
                     "description": "Generate a Bill of Materials: a list of all visible, distinct solid parts currently in the assembly document, with each part's name and volume.",
                     "parameters": GetBOM.model_json_schema(),
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "export",
+                    "description": "Export the current visible assembly to a STEP or STL file. The file will be saved to the project's exports/ folder. Provide the desired format ('step' or 'stl') and a base filename without extension.",
+                    "parameters": ExportModel.model_json_schema(),
                 }
             },
         ]
@@ -470,6 +480,28 @@ class FreeCADAdapter(CADAdapter):
             if tool_name == "get_bom":
                 return str(
                     self._proxy.get_bom(kwargs.get("id", "bom"))
+                )
+
+            if tool_name == "export":
+                exp_id = kwargs.get("id", "export")
+                fmt = kwargs.get("format", "step")
+                filename = kwargs.get("filename", "export")
+
+                # Sanitize filename: replace spaces and special chars
+                safe_name = re.sub(r'[^\w\-]', '_', filename)
+                # Ensure correct extension
+                ext = ".stl" if fmt.lower() == "stl" else ".step"
+                if not safe_name.endswith(ext):
+                    safe_name += ext
+
+                # Calculate absolute path to exports/ at project root
+                project_root = Path(__file__).resolve().parent.parent.parent
+                exports_dir = project_root / "exports"
+                exports_dir.mkdir(parents=True, exist_ok=True)
+                filepath = str(exports_dir / safe_name)
+
+                return str(
+                    self._proxy.export_model(exp_id, fmt, filepath)
                 )
 
             raise NotImplementedError(

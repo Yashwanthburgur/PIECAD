@@ -182,6 +182,17 @@ class GetBOM(BaseModel):
     op: Literal["get_bom"] = Field(default="get_bom")
 
 
+class ExportModel(OpBase):
+    """Exports the current visible assembly to a STEP or STL file."""
+    id: str = Field(description="Unique ID for this export operation")
+    op: Literal["export"] = Field(
+        default="export", description="Operation type, must be 'export'")
+    format: Literal["step", "stl"] = Field(
+        description="Export format: 'step' or 'stl'")
+    filename: str = Field(
+        description="Base filename without extension (e.g., 'my_part')")
+
+
 # Union of all operations for use in the agent
 Operation = Union[
     Boolean,
@@ -199,4 +210,5 @@ Operation = Union[
     Mate,
     GetMassProperties,
     GetBOM,
+    ExportModel,
 ]
