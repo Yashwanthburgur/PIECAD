@@ -200,7 +200,7 @@ class EditFeature(OpBase):
     target_id: str = Field(
         description="The ID of the object to modify, e.g., 'box1'")
     parameters: dict = Field(
-        description="Dictionary of property names and their new float values, e.g., {'Length': 120.0, 'Width': 60.0}")
+        description="Dictionary of property names (e.g., 'Length', 'Radius') and their new float values. To move the object, use coordinate keys 'x', 'y', or 'z' (absolute Placement.Base position), e.g. {'Length': 120.0, 'x': 40.0}")
 
 
 # Union of all operations for use in the agent
