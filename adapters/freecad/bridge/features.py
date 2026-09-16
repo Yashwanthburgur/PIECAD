@@ -13,11 +13,16 @@ from ._common import _active_doc, _sync
 def _impl_edit_feature(id: str, target_id: str, parameters: dict):
     """Modify the parametric properties of an existing CAD feature.
 
+    Supports regular FreeCAD properties (e.g., Length, Radius, Height) as
+    well as the special coordinate keys 'x', 'y', and 'z', which are applied
+    to the object's Placement.Base (absolute position) instead of being
+    guessed as nonexistent attributes.
+
     Args:
         id: Unique ID for this edit operation
         target_id: The ID of the object to modify (e.g., 'box1')
         parameters: Dictionary of property names and their new float values
-                   (e.g., {'Length': 120.0, 'Width': 60.0})
+                   (e.g., {'Length': 120.0, 'x': 40.0})
 
     Returns:
         Success message after sync.
@@ -28,14 +33,35 @@ def _impl_edit_feature(id: str, target_id: str, parameters: dict):
     if not obj:
         raise RuntimeError(f"Target object '{target_id}' not found.")
 
+    # Snapshot the current placement so x/y/z keys can patch it in place.
+    placement = obj.Placement
+    base = placement.Base
+    placement_changed = False
+
     for key, value in parameters.items():
-        if hasattr(obj, key):
+        if key == 'x':
+            base.x = float(value)
+            placement_changed = True
+        elif key == 'y':
+            base.y = float(value)
+            placement_changed = True
+        elif key == 'z':
+            base.z = float(value)
+            placement_changed = True
+        elif hasattr(obj, key):
             try:
                 setattr(obj, key, float(value))
             except Exception as e:
                 raise RuntimeError(f"Failed to set parameter '{key}' on {target_id}: {e}")
         else:
             raise RuntimeError(f"Object '{target_id}' does not have a parameter named '{key}'.")
+
+    if placement_changed:
+        # Explicitly write the vector back: FreeCAD may hand out value-copies
+        # of Placement/Vector objects, so mutating `base` in isolation is not
+        # guaranteed to propagate to `placement`.
+        placement.Base = base
+        obj.Placement = placement
 
     return _sync(doc)
 
