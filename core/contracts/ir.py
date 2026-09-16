@@ -60,7 +60,15 @@ class Hole(OpBase):
     diameter: float = Field(gt=0)
     depth: float = Field(gt=0)
     kind: Literal["simple", "tapped", "counterbore", "countersink"] = "simple"
-    thread_spec: Optional[str] = Field(default=None, description="e.g. 'M6'")
+    thread_spec: Optional[str] = Field(
+        default=None,
+        description=(
+            "Required when kind='tapped'. Standard thread designation, e.g. "
+            "metric 'M3x0.5', 'M4x0.7', 'M5x0.8', 'M6x1.0', 'M8x1.25', "
+            "'M10x1.5', 'M12x1.75' or UNC '1/4-20 UNC', '5/16-18 UNC', "
+            "'3/8-16 UNC'."
+        ),
+    )
 
 
 # --- Sketch & Extrude (B-rep workflow) ---

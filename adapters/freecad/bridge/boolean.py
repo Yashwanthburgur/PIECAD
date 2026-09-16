@@ -9,6 +9,62 @@ import Part
 
 from ._common import _active_doc, _sync, _impl_set_visible
 
+# Standard tap drill minor diameters in millimetres.
+# Industrial tapped holes are modelled as tap-drill holes with persistent
+# thread metadata rather than true helical solid geometry.
+_TAP_DRILL_MM = {
+    "M3x0.5": 2.5,
+    "M4x0.7": 3.3,
+    "M5x0.8": 4.2,
+    "M6x1.0": 5.0,
+    "M8x1.25": 6.8,
+    "M10x1.5": 8.5,
+    "M12x1.75": 10.2,
+    "1/4-20 UNC": 5.1,
+    "5/16-18 UNC": 6.6,
+    "3/8-16 UNC": 8.0,
+}
+
+
+def _available_thread_designations():
+    return ", ".join(sorted(_TAP_DRILL_MM.keys()))
+
+
+def _normalize_thread_spec(thread_spec):
+    s = str(thread_spec).strip()
+    s = " ".join(s.split())
+
+    # Metric normalisation: m6 x 1.0 / M6 X 1.0 / M 6 X 1.0 -> M6x1.0
+    if s.upper().startswith("M"):
+        s = s.upper().replace(" ", "")
+        s = s.replace("X", "x")
+        s = "M" + s[1:]
+
+    # UNC normalisation: 1/4-20 unc / 1/4-20UNC -> 1/4-20 UNC
+    if "UNC" in s.upper():
+        s = s.upper()
+        s = s.replace("UNC", " UNC")
+        s = " ".join(s.split())
+
+    return s
+
+
+def _resolve_tap_drill(thread_spec):
+    if not thread_spec:
+        raise RuntimeError(
+            "Tapped holes require a thread_spec designation. "
+            f"Available standard designations are: {_available_thread_designations()}."
+        )
+
+    normalized = _normalize_thread_spec(thread_spec)
+    if normalized in _TAP_DRILL_MM:
+        return _TAP_DRILL_MM[normalized], normalized
+
+    raise RuntimeError(
+        f"Unknown tapped-hole thread_spec '{thread_spec}'. "
+        f"Available standard designations are: {_available_thread_designations()}."
+    )
+
 
 def _impl_boolean(operation: str, base_obj: str, tool_obj: str, result_name: str):
     """Perform a boolean operation between two existing objects.
@@ -60,12 +116,12 @@ def _impl_hole(id: str, target_id: str, origin: dict, direction: dict, diameter:
     """Create a hole by drilling into a target object.
 
     Supports: simple, tapped, counterbore, countersink.
-    For tapped holes with M-series thread_spec (e.g., "M6"), uses the major diameter
-    as the drill diameter (tap drill diameter in practice would be smaller, but we
-    use major diameter for the initial cut).
-    """
-    import Part
 
+    For tapped holes, the numeric diameter is intentionally ignored and the
+    standard ISO/UNC tap drill minor diameter is resolved from thread_spec.
+    The resulting Part::Cut feature is tagged with persistent ThreadSpec
+    metadata.
+    """
     doc = _active_doc()
     target_obj = doc.getObject(target_id)
     if not target_obj:
@@ -76,14 +132,16 @@ def _impl_hole(id: str, target_id: str, origin: dict, direction: dict, diameter:
     c_dir = App.Vector(float(direction['x']), float(
         direction['y']), float(direction['z']))
 
-    # Machine Logic: Parse M-series threads
-    eff_diameter = float(diameter)
-    if kind == "tapped" and thread_spec and str(thread_spec).upper().startswith("M"):
-        try:
-            eff_diameter = float(
-                str(thread_spec).upper().replace("M", "").strip())
-        except ValueError:
-            pass
+    c_dir_norm = App.Vector(c_dir.x, c_dir.y, c_dir.z)
+    if c_dir_norm.Length <= 0:
+        raise RuntimeError("Hole direction vector must have a non-zero length.")
+    c_dir_norm.normalize()
+
+    if kind == "tapped":
+        eff_diameter, canonical_thread_spec = _resolve_tap_drill(thread_spec)
+    else:
+        eff_diameter = float(diameter)
+        canonical_thread_spec = None
 
     eff_radius = eff_diameter / 2.0
 
@@ -98,9 +156,6 @@ def _impl_hole(id: str, target_id: str, origin: dict, direction: dict, diameter:
     # subtraction on coincident (coplanar) faces ("just a mark" bug).
     tool_obj.Height = float(depth) + 2.0
 
-    c_dir_norm = App.Vector(c_dir)
-    if c_dir_norm.Length > 0:
-        c_dir_norm.normalize()
     placement = App.Placement()
     placement.Base = c_origin - c_dir_norm * 1.0
     # Rotate the cylinder's local +Z axis onto the drill direction vector.
@@ -112,8 +167,22 @@ def _impl_hole(id: str, target_id: str, origin: dict, direction: dict, diameter:
     cut_obj.Base = target_obj
     cut_obj.Tool = tool_obj
 
-    target_obj.ViewObject.Visibility = False
+    _impl_set_visible(target_obj, False)
     _impl_set_visible(tool_obj, False)
 
+    # Persist mechanical thread metadata on the resulting feature.
+    if kind == "tapped":
+        if not hasattr(cut_obj, "ThreadSpec"):
+            cut_obj.addProperty("App::PropertyString", "ThreadSpec", "Mechanical")
+        cut_obj.ThreadSpec = canonical_thread_spec
+
     _sync(doc)
+
+    if kind == "tapped":
+        return (
+            f"Successfully created {kind} hole '{id}' in '{target_id}' using "
+            f"tap drill diameter {eff_diameter} mm for {canonical_thread_spec}, "
+            f"depth {depth}."
+        )
+
     return f"Successfully created {kind} hole '{id}' in '{target_id}' with diameter {eff_diameter}, depth {depth}."

@@ -94,7 +94,13 @@ class FreeCADAdapter(CADAdapter):
                 "type": "function",
                 "function": {
                     "name": "hole",
-                    "description": "Create a hole by drilling into a face at a point. Automatically calculates depth for through-all if not specified.",
+                    "description": (
+                        "Create a hole by drilling into a face at a point. "
+                        "For tapped/threaded holes, set kind='tapped' and provide "
+                        "thread_spec using a standard designation such as 'M6x1.0' "
+                        "or '1/4-20 UNC'. The tool will use the correct tap drill "
+                        "diameter and ignore the numeric diameter for tapped holes."
+                    ),
                     "parameters": Hole.model_json_schema(),
                 }
             },
