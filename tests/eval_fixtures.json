@@ -3,6 +3,7 @@
     "id": "primitive_creation",
     "name": "Primitive Creation",
     "prompt": "Make a base plate 100x100x10.",
+    "expected_tools_called": ["box"],
     "expected_state": [
       {
         "condition": "exists_type",
@@ -19,6 +20,7 @@
     "id": "indecisive_client",
     "name": "Indecisive Client",
     "prompt": "Make a box 50x50x50. Actually, change the width to 80.",
+    "expected_tools_called": ["box", "edit_feature"],
     "expected_state": [
       {
         "condition": "exists_type",
@@ -33,6 +35,7 @@
     "id": "boolean_hierarchy",
     "name": "Boolean Hierarchy",
     "prompt": "Make a box 50x50x50. Make a cylinder radius 10 height 50. Subtract the cylinder from the box.",
+    "expected_tools_called": ["box", "cylinder", "boolean"],
     "expected_state": [
       {
         "condition": "exists_type",
@@ -49,6 +52,7 @@
     "id": "edge_fillet",
     "name": "Edge Fillet",
     "prompt": "Make a box 20x20x20. Find its edges and fillet the first one with radius 2.",
+    "expected_tools_called": ["box", "get_edges", "fillet"],
     "expected_state": [
       {
         "condition": "exists_type",
@@ -60,6 +64,7 @@
     "id": "complex_flange",
     "name": "Complex Flange (11+ Steps)",
     "prompt": "Make a base plate 100x100x10. Put a hole in the center with radius 20. Then chamfer the 4 vertical outer edges by 5mm.",
+    "expected_tools_called": ["box", "hole", "get_edges", "chamfer"],
     "expected_state": [
       {
         "condition": "exists_type",
@@ -89,6 +94,7 @@
     "id": "semantic_sketch",
     "name": "Semantic Sketch",
     "prompt": "Make a box 50x50x10. On the top face, sketch a 10x10 rectangle and extrude it by 20.",
+    "expected_tools_called": ["box", "get_faces", "sketch", "extrude"],
     "expected_state": [
       {
         "condition": "exists_type",
@@ -111,5 +117,51 @@
     "name": "pattern_bolt_circle",
     "prompt": "Create a base plate, put a hole in it, and pattern that hole 6 times circularly.",
     "expected_tools_called": ["box", "hole", "pattern_circular"]
+  },
+  {
+    "name": "tapped_hole_m6_plate",
+    "prompt": "Create a 50x50x10mm base plate and drill an M6x1.0 tapped hole directly in the center.",
+    "expected_tools_called": ["box", "hole"]
+  },
+  {
+    "name": "tapped_hole_m10_flange",
+    "prompt": "Create a cylinder flange with a 100mm radius and 20mm height. Add a bolt circle of 4 M10x1.5 tapped holes around the Z axis at a radius of 75mm.",
+    "expected_tools_called": ["cylinder", "hole", "pattern_circular"],
+    "neutral_assertions": [
+      "verify_volume_reduction",
+      "verify_face_count_increase"
+    ]
+  },
+  {
+    "name": "assembly_clearance_verify",
+    "prompt": "Create a 50x50x50mm block and drill a 10mm diameter simple hole through it. Create a 10mm diameter pin (cylinder) that is 50mm long. Mate the pin concentrically into the hole and make them flush. Finally, run an interference check to verify they do not crash.",
+    "expected_tools_called": [
+      "box",
+      "hole",
+      "cylinder",
+      "get_faces",
+      "mate",
+      "interference_check"
+    ]
+  },
+  {
+    "name": "parametric_resizing_cascade",
+    "prompt": "Create a 50x50x50mm box. Put a 5mm radius simple hole through the top face. Then edit the box feature to change its Length to 100mm.",
+    "expected_tools_called": ["box", "get_faces", "hole", "edit_feature"]
+  },
+  {
+    "name": "compound_bearing_housing",
+    "prompt": "Create a bearing housing: start with a cylinder radius 40 height 30. Cut a concentric simple hole of radius 20 through it. Add a circular pattern of 6 5mm radius simple holes around the main axis at a 30mm radius. Finally, apply a 2mm fillet to the outer top edge.",
+    "expected_tools_called": [
+      "cylinder",
+      "hole",
+      "pattern_circular",
+      "get_edges",
+      "fillet"
+    ],
+    "neutral_assertions": [
+      "verify_volume_reduction",
+      "verify_face_count_increase"
+    ]
   }
 ]

@@ -17,7 +17,7 @@ from typing import Any, Dict, List
 import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
-from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell, Mate, GetMassProperties, GetBOM, ExportModel, EditFeature
+from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell, Mate, GetMassProperties, GetBOM, ExportModel, EditFeature, InterferenceCheck
 
 
 def _parse_dict_arg(arg, default_val):
@@ -196,6 +196,14 @@ class FreeCADAdapter(CADAdapter):
                     "name": "get_bom",
                     "description": "Generate a Bill of Materials: a list of all visible, distinct solid parts currently in the assembly document, with each part's name and volume.",
                     "parameters": GetBOM.model_json_schema(),
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "interference_check",
+                    "description": "Run pairwise interference (clash) detection across all visible solids in the assembly (or a specified subset). Returns clash details including overlapping volume for each intersecting pair.",
+                    "parameters": InterferenceCheck.model_json_schema(),
                 }
             },
             {
@@ -494,6 +502,15 @@ class FreeCADAdapter(CADAdapter):
             if tool_name == "get_bom":
                 return str(
                     self._proxy.get_bom(kwargs.get("id", "bom"))
+                )
+
+            if tool_name == "interference_check":
+                part_ids = kwargs.get("part_ids")
+                return str(
+                    self._proxy.interference_check(
+                        kwargs.get("id", "interference"),
+                        part_ids
+                    )
                 )
 
             if tool_name == "export":

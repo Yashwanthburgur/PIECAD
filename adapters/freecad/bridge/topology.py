@@ -158,3 +158,77 @@ def _impl_get_bom(id):
                     "volume": round(float(obj.Shape.Volume), 3)
                 })
     return {"status": "success", "parts": bom}
+
+
+def _impl_interference_check(id: str, part_ids=None):
+    """Detect physical clashes between assembly parts via pairwise B-Rep boolean
+    intersection (OpenCASCADE `common()`).
+
+    Args:
+        id: Unique ID for this query (passed through for parity with other tools).
+        part_ids: Optional list of object IDs to test. If None, every visible
+            solid object in the active document is tested.
+
+    Returns:
+        JSON-serializable dict:
+        {"status": "success", "has_clash": bool, "clash_count": int,
+         "clashes": [{"part_a": ..., "part_b": ..., "clash_volume": float}]}
+        A pair is flagged when the intersection volume exceeds 1e-4 mm^3,
+        which filters out numerical noise from touching faces/edges.
+    """
+    from itertools import combinations
+
+    TOLERANCE_MM3 = 1e-4
+
+    doc = _active_doc()
+
+    # --- Target selection ---
+    solids = []
+    if part_ids:
+        for pid in part_ids:
+            obj = doc.getObject(pid)
+            if obj is None:
+                raise RuntimeError(
+                    f"Object '{pid}' not found for interference check.")
+            if not hasattr(obj, "Shape") or obj.Shape is None:
+                raise RuntimeError(
+                    f"Object '{pid}' has no Shape to test for interference.")
+            solids.append(obj)
+    else:
+        for obj in doc.Objects:
+            # Must be a visible object with a solid B-rep shape.
+            if not hasattr(obj, "Shape") or obj.Shape is None:
+                continue
+            view = getattr(obj, "ViewObject", None)
+            if view is not None and not view.Visibility:
+                continue
+            try:
+                if obj.Shape.ShapeType != "Solid":
+                    continue
+            except Exception:
+                continue
+            solids.append(obj)
+
+    # --- Pairwise collision math ---
+    clashes = []
+    for obj_a, obj_b in combinations(solids, 2):
+        try:
+            common_shape = obj_a.Shape.common(obj_b.Shape)
+            overlap = float(common_shape.Volume)
+        except Exception:
+            # OCC boolean failure on degenerate geometry: skip this pair
+            # rather than aborting the whole analysis.
+            continue
+        if overlap > TOLERANCE_MM3:
+            clashes.append({
+                "part_a": getattr(obj_a, "Label", obj_a.Name),
+                "part_b": getattr(obj_b, "Label", obj_b.Name),
+                "clash_volume": round(overlap, 4),
+            })
+
+    return {
+        "status": "success",
+        "has_clash": bool(clashes),
+        "clash_count": len(clashes),
+        "clashes": clashes,
+    }

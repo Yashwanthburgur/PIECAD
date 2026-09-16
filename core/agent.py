@@ -59,6 +59,13 @@ You can build multi-part assemblies by spawning independent bodies and constrain
   Step 4: Use 'mate' with mate_type='concentric' to align the pin into the hole.
   Step 5: (Optional) Use 'mate' with mate_type='coincident' to seat the pin flush.
 
+INTERFERENCE CHECK (MANDATORY):
+After completing multi-part assemblies or executing `mate` constraints, you MUST run `interference_check` to verify zero geometric collision before answering the user or exporting.
+- The tool performs pairwise B-Rep boolean intersection across all active visible solids (or a specified subset).
+- A clash is flagged when the common volume exceeds 1e-4 mm³ (filters numerical noise from touching faces/edges).
+- If `has_clash: true` is returned, you MUST fix the assembly (adjust mates, reposition parts) and re-run `interference_check` until `has_clash: false`.
+- Do NOT proceed to export or final response until the assembly is clash-free.
+
 EXPORTING FILES:
 When a user asks to save, download, or export a model (e.g., "save as STEP", "export to STL", "download the model"), you MUST use the `export` tool.
 - The `export` tool saves the current visible assembly to a file in the project's exports/ folder.

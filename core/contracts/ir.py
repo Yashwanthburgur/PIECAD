@@ -190,6 +190,18 @@ class GetBOM(BaseModel):
     op: Literal["get_bom"] = Field(default="get_bom")
 
 
+class InterferenceCheck(OpBase):
+    """Checks pairwise geometric interference (clashes) between active solid parts."""
+    id: str = Field(description="Unique ID for this query")
+    op: Literal["interference_check"] = Field(
+        default="interference_check",
+        description="Operation type, must be 'interference_check'")
+    part_ids: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of object IDs to test against each other. "
+        "If omitted, the whole visible assembly is tested.")
+
+
 class ExportModel(OpBase):
     """Exports the current visible assembly to a STEP or STL file."""
     id: str = Field(description="Unique ID for this export operation")
@@ -228,6 +240,7 @@ Operation = Union[
     Mate,
     GetMassProperties,
     GetBOM,
+    InterferenceCheck,
     ExportModel,
     EditFeature,
 ]
