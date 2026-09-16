@@ -17,7 +17,7 @@ from typing import Any, Dict, List
 import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
-from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell, Mate, GetMassProperties, GetBOM, ExportModel
+from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell, Mate, GetMassProperties, GetBOM, ExportModel, EditFeature
 
 
 def _parse_dict_arg(arg, default_val):
@@ -198,6 +198,14 @@ class FreeCADAdapter(CADAdapter):
                     "name": "export",
                     "description": "Export the current visible assembly to a STEP or STL file. The file will be saved to the project's exports/ folder. Provide the desired format ('step' or 'stl') and a base filename without extension.",
                     "parameters": ExportModel.model_json_schema(),
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "edit_feature",
+                    "description": "Modify the parametric properties of an existing CAD feature (e.g., changing Length, Width, Radius, Height). The CAD kernel will automatically cascade these changes to all downstream dependent features. Provide the target object ID and a dictionary of property names and their new float values.",
+                    "parameters": EditFeature.model_json_schema(),
                 }
             },
         ]
@@ -502,6 +510,22 @@ class FreeCADAdapter(CADAdapter):
 
                 return str(
                     self._proxy.export_model(exp_id, fmt, filepath)
+                )
+
+            if tool_name == "edit_feature":
+                params = kwargs.get("parameters", {})
+                if isinstance(params, str):
+                    import ast
+                    try:
+                        params = ast.literal_eval(params)
+                    except Exception:
+                        params = {}
+                return str(
+                    self._proxy.edit_feature(
+                        kwargs.get("id", "edit"),
+                        kwargs.get("target_id", ""),
+                        params
+                    )
                 )
 
             raise NotImplementedError(

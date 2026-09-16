@@ -193,6 +193,16 @@ class ExportModel(OpBase):
         description="Base filename without extension (e.g., 'my_part')")
 
 
+class EditFeature(OpBase):
+    """Modifies the parametric properties of an existing CAD feature (e.g., changing Length, Radius, Height)."""
+    id: str = Field(description="Unique ID for this query")
+    op: Literal["edit_feature"] = Field(default="edit_feature")
+    target_id: str = Field(
+        description="The ID of the object to modify, e.g., 'box1'")
+    parameters: dict = Field(
+        description="Dictionary of property names and their new float values, e.g., {'Length': 120.0, 'Width': 60.0}")
+
+
 # Union of all operations for use in the agent
 Operation = Union[
     Boolean,
@@ -211,4 +221,5 @@ Operation = Union[
     GetMassProperties,
     GetBOM,
     ExportModel,
+    EditFeature,
 ]

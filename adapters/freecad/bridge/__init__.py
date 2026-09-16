@@ -64,7 +64,7 @@ from .topology import (
 # Import primitive and boolean implementations
 from .primitives import _impl_create_box, _impl_create_cylinder
 from .boolean import _impl_boolean, _impl_hole
-from .features import _impl_fillet, _impl_chamfer, _impl_shell
+from .features import _impl_fillet, _impl_chamfer, _impl_shell, _impl_edit_feature
 from .sketch import _impl_sketch, _impl_extrude
 from .patterns import _impl_pattern_linear, _impl_pattern_circular
 from .assembly import _impl_mate
@@ -292,6 +292,7 @@ _IMPLEMENTATIONS = {
     "get_edges": _impl_get_edges,
     "hole": _impl_hole,
     "edit_object": _impl_edit_object,
+    "edit_feature": _impl_edit_feature,
     "sketch": _impl_sketch,
     "extrude": _impl_extrude,
     "fillet": _impl_fillet,
@@ -489,6 +490,10 @@ def export_model(id, format_type, filepath):
     return _execute_on_main_thread("export_model", id, format_type, filepath)
 
 
+def edit_feature(id, target_id, parameters):
+    return _execute_on_main_thread("edit_feature", id, target_id, parameters)
+
+
 _HANDLERS = {
     "create_box": create_box,
     "create_cylinder": create_cylinder,
@@ -501,6 +506,7 @@ _HANDLERS = {
     "get_edges": get_edges,
     "hole": hole,
     "edit_object": edit_object,
+    "edit_feature": edit_feature,
     "sketch": sketch,
     "extrude": extrude,
     "fillet": fillet,

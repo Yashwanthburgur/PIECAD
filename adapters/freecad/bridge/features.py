@@ -10,6 +10,36 @@ import Part
 from ._common import _active_doc, _sync
 
 
+def _impl_edit_feature(id: str, target_id: str, parameters: dict):
+    """Modify the parametric properties of an existing CAD feature.
+
+    Args:
+        id: Unique ID for this edit operation
+        target_id: The ID of the object to modify (e.g., 'box1')
+        parameters: Dictionary of property names and their new float values
+                   (e.g., {'Length': 120.0, 'Width': 60.0})
+
+    Returns:
+        Success message after sync.
+    """
+    doc = _active_doc()
+    obj = doc.getObject(target_id)
+
+    if not obj:
+        raise RuntimeError(f"Target object '{target_id}' not found.")
+
+    for key, value in parameters.items():
+        if hasattr(obj, key):
+            try:
+                setattr(obj, key, float(value))
+            except Exception as e:
+                raise RuntimeError(f"Failed to set parameter '{key}' on {target_id}: {e}")
+        else:
+            raise RuntimeError(f"Object '{target_id}' does not have a parameter named '{key}'.")
+
+    return _sync(doc)
+
+
 def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float):
     """Apply a fillet to specific edges of an object.
 

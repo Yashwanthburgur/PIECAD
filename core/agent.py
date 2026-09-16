@@ -63,6 +63,12 @@ If a tool returns an error, `<Fault>`, or `RuntimeError` from the CAD kernel, DO
 - If `hole` fails: Your diameter may be larger than the target object itself. Reduce the diameter and retry.
 ALWAYS attempt at least two mathematical corrections before informing the user that a geometry is impossible to construct.
 
+PARAMETRIC EDITING:
+If the user asks to change the size, dimension, or property of an existing part (e.g., "make the box 20mm wider", "increase the hole radius to 15"):
+1. DO NOT delete and recreate the object. Doing so destroys the parametric history.
+2. Use the `edit_feature` tool, providing the `target_id` and a dictionary of the properties to update (e.g., `{"Width": 70.0}`).
+3. The CAD kernel will automatically cascade these dimension changes to all downstream dependent features.
+
 """
 
 
