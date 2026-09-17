@@ -230,74 +230,63 @@ def run_neutral_assertions(
         state_json = adapter.get_state()
         state = json.loads(state_json)
 
-        # Find the main solid object (first Part::Box, Part::Cylinder, etc.)
-        # and the cut/result object if present
-        main_solid = None
-        cut_result = None
-        base_solid = None
+        # Neutral object selection (CAD-system-agnostic, no FreeCAD TypeIds):
+        # - final_object: LAST object in the state array that is visible AND a Solid.
+        # - base_object: FIRST object in the state array that is a Solid.
+        solids = [obj for obj in state if obj.get("shape_type") == "Solid"]
+        visible_solids = [obj for obj in solids if obj.get("visible") is True]
+        final_obj = visible_solids[-1] if visible_solids else None
+        base_obj = solids[0] if solids else None
 
-        for obj in state:
-            obj_type = obj.get("type", "")
-            if obj_type in ("Part::Box", "Part::Cylinder") and not main_solid:
-                main_solid = obj
-            if obj_type == "Part::Cut" and not cut_result:
-                cut_result = obj
-                # Find the base (first child that's a solid)
-                for child_name in obj.get("children", []):
-                    for o in state:
-                        if o.get("id") == child_name and o.get("type") in ("Part::Box", "Part::Cylinder"):
-                            base_solid = o
-                            break
+        if not final_obj:
+            return {"passed": False, "details": ["No visible solid object found in final state"]}
 
-        # If no explicit cut, use the main solid as the operated object
-        target_obj = cut_result or main_solid
-        base_obj = base_solid or main_solid
-
-        if not target_obj:
-            return {"passed": False, "details": ["No target solid object found in final state"]}
-
-        target_name = target_obj.get("id") or target_obj.get("label") or ""
-        base_name = base_obj.get("id") or base_obj.get("label") or ""
+        target_name = final_obj.get("id") or final_obj.get("label") or ""
+        base_name = ""
+        if base_obj:
+            base_name = base_obj.get("id") or base_obj.get("label") or ""
 
         if not target_name:
             return {"passed": False, "details": ["Could not determine target object name"]}
 
-        # For volume reduction, we'd ideally need pre-cut mass of base_solid.
-        # Since we can't get historical state, we approximate by using the
-        # base solid's current mass if it's still visible, otherwise we skip
-        # the strict volume check and rely on face count.
         details = []
 
         for assertion in assertions:
-            if assertion == "verify_volume_reduction":
-                # Try to get mass properties of base and target
+            if assertion == "verify_exists":
+                # Final object must exist and have positive volume
                 try:
-                    base_mass = None
+                    target_mass_str = adapter.execute_command(
+                        "get_mass_properties", id="target_verify", object_name=target_name)
+                    ok = GeometryVerifier.verify_exists(target_mass_str)
+                    details.append(("verify_exists", ok))
+                    if not ok:
+                        results["passed"] = False
+                except Exception as e:
+                    details.append(("verify_exists", False, str(e)))
+                    results["passed"] = False
+
+            elif assertion == "verify_volume_reduction":
+                # Compare base solid mass vs final solid mass
+                try:
+                    base_mass_str = "{}"
                     if base_name and base_name != target_name:
                         base_mass_str = adapter.execute_command(
                             "get_mass_properties", id="base_verify", object_name=base_name)
-                        base_mass = json.loads(base_mass_str)
 
                     target_mass_str = adapter.execute_command(
                         "get_mass_properties", id="target_verify", object_name=target_name)
-                    target_mass = json.loads(target_mass_str)
 
-                    if base_mass and target_mass:
-                        ok = GeometryVerifier.verify_volume_reduction(
-                            json.dumps(base_mass), json.dumps(target_mass))
-                        details.append(("verify_volume_reduction", ok))
-                        if not ok:
-                            results["passed"] = False
-                    else:
-                        # Can't verify without both
-                        # skip gracefully
-                        details.append(("verify_volume_reduction", True))
+                    ok = GeometryVerifier.verify_volume_reduction(
+                        base_mass_str, target_mass_str)
+                    details.append(("verify_volume_reduction", ok))
+                    if not ok:
+                        results["passed"] = False
                 except Exception as e:
                     details.append(("verify_volume_reduction", False, str(e)))
                     results["passed"] = False
 
             elif assertion == "verify_face_count_increase":
-                # Compare face count of base vs target
+                # Compare face count of base vs final solid
                 try:
                     base_faces_str = "[]"
                     if base_name and base_name != target_name:

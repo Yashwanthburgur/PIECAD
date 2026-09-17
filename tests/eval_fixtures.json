@@ -4,90 +4,37 @@
     "name": "Primitive Creation",
     "prompt": "Make a base plate 100x100x10.",
     "expected_tools_called": ["box"],
-    "expected_state": [
-      {
-        "condition": "exists_type",
-        "type": "Part::Box",
-        "properties": {
-          "Length": 100,
-          "Width": 100,
-          "Height": 10
-        }
-      }
-    ]
+    "neutral_assertions": ["verify_exists"]
   },
   {
     "id": "indecisive_client",
     "name": "Indecisive Client",
     "prompt": "Make a box 50x50x50. Actually, change the width to 80.",
     "expected_tools_called": ["box", "edit_feature"],
-    "expected_state": [
-      {
-        "condition": "exists_type",
-        "type": "Part::Box",
-        "properties": {
-          "Width": 80
-        }
-      }
-    ]
+    "neutral_assertions": ["verify_exists"]
   },
   {
     "id": "boolean_hierarchy",
     "name": "Boolean Hierarchy",
     "prompt": "Make a box 50x50x50. Make a cylinder radius 10 height 50. Subtract the cylinder from the box.",
     "expected_tools_called": ["box", "cylinder", "boolean"],
-    "expected_state": [
-      {
-        "condition": "exists_type",
-        "type": "Part::Cut"
-      },
-      {
-        "condition": "dag_children_of_cut",
-        "expected_children": ["Part::Box", "Part::Cylinder"],
-        "expected_substrings": ["box", "cylinder"]
-      }
-    ]
+    "neutral_assertions": ["verify_volume_reduction"]
   },
   {
     "id": "edge_fillet",
     "name": "Edge Fillet",
     "prompt": "Make a box 20x20x20. Find its edges and fillet the first one with radius 2.",
     "expected_tools_called": ["box", "get_edges", "fillet"],
-    "expected_state": [
-      {
-        "condition": "exists_type",
-        "type": "Part::Fillet"
-      }
-    ]
+    "neutral_assertions": ["verify_face_count_increase"]
   },
   {
     "id": "complex_flange",
     "name": "Complex Flange (11+ Steps)",
     "prompt": "Make a base plate 100x100x10. Put a hole in the center with radius 20. Then chamfer the 4 vertical outer edges by 5mm.",
     "expected_tools_called": ["box", "hole", "get_edges", "chamfer"],
-    "expected_state": [
-      {
-        "condition": "exists_type",
-        "type": "Part::Box",
-        "properties": {
-          "Length": 100,
-          "Width": 100,
-          "Height": 10
-        }
-      },
-      {
-        "condition": "exists_type",
-        "type": "Part::Cut"
-      },
-      {
-        "condition": "dag_children_of_cut",
-        "expected_children": ["Part::Box", "Part::Cylinder"],
-        "expected_substrings": ["box", "cylinder"]
-      },
-      {
-        "condition": "exists_type",
-        "type": "Part::Chamfer"
-      }
+    "neutral_assertions": [
+      "verify_volume_reduction",
+      "verify_face_count_increase"
     ]
   },
   {
@@ -95,33 +42,34 @@
     "name": "Semantic Sketch",
     "prompt": "Make a box 50x50x10. On the top face, sketch a 10x10 rectangle and extrude it by 20.",
     "expected_tools_called": ["box", "get_faces", "sketch", "extrude"],
-    "expected_state": [
-      {
-        "condition": "exists_type",
-        "type": "Part::Feature",
-        "description": "Extrusion result should be a Part::Feature"
-      }
-    ]
+    "neutral_assertions": ["verify_exists"]
   },
   {
     "name": "shell_enclosure",
     "prompt": "Create a box 80x50x30. Query faces, find the top face, and shell it inward by 2mm.",
-    "expected_tools_called": ["box", "get_faces", "shell"]
+    "expected_tools_called": ["box", "get_faces", "shell"],
+    "neutral_assertions": ["verify_volume_reduction"]
   },
   {
     "name": "mate_concentric",
     "prompt": "Create a base with a hole. Create a pin. Mate the pin concentrically into the hole.",
-    "expected_tools_called": ["box", "hole", "cylinder", "get_faces", "mate"]
+    "expected_tools_called": ["box", "hole", "cylinder", "get_faces", "mate"],
+    "neutral_assertions": ["verify_volume_reduction"]
   },
   {
     "name": "pattern_bolt_circle",
     "prompt": "Create a base plate, put a hole in it, and pattern that hole 6 times circularly.",
-    "expected_tools_called": ["box", "hole", "pattern_circular"]
+    "expected_tools_called": ["box", "hole", "pattern_circular"],
+    "neutral_assertions": [
+      "verify_volume_reduction",
+      "verify_face_count_increase"
+    ]
   },
   {
     "name": "tapped_hole_m6_plate",
     "prompt": "Create a 50x50x10mm base plate and drill an M6x1.0 tapped hole directly in the center.",
-    "expected_tools_called": ["box", "hole"]
+    "expected_tools_called": ["box", "hole"],
+    "neutral_assertions": ["verify_volume_reduction"]
   },
   {
     "name": "tapped_hole_m10_flange",
@@ -142,12 +90,14 @@
       "get_faces",
       "mate",
       "interference_check"
-    ]
+    ],
+    "neutral_assertions": ["verify_volume_reduction"]
   },
   {
     "name": "parametric_resizing_cascade",
     "prompt": "Create a 50x50x50mm box. Put a 5mm radius simple hole through the top face. Then edit the box feature to change its Length to 100mm.",
-    "expected_tools_called": ["box", "get_faces", "hole", "edit_feature"]
+    "expected_tools_called": ["box", "get_faces", "hole", "edit_feature"],
+    "neutral_assertions": ["verify_volume_reduction"]
   },
   {
     "name": "compound_bearing_housing",

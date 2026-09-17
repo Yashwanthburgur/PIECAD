@@ -20,6 +20,25 @@ class GeometryVerifier:
     """
 
     @staticmethod
+    def verify_exists(final_mass_json: str) -> bool:
+        """
+        Verify that a final solid exists and has positive volume.
+
+        Args:
+            final_mass_json: JSON from get_mass_properties on the final solid.
+
+        Returns:
+            True if the JSON parses and its Volume is strictly greater than 0.0,
+            False otherwise (including parse errors).
+        """
+        try:
+            data = json.loads(final_mass_json)
+            volume = data.get("Volume", 0.0)
+            return volume > 0.0
+        except (json.JSONDecodeError, AttributeError, TypeError, KeyError):
+            return False
+
+    @staticmethod
     def verify_volume_reduction(base_mass_json: str, cut_mass_json: str) -> bool:
         """
         Verify that a boolean subtraction/hole operation actually removed material.
