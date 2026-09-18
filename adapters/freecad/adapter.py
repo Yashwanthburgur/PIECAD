@@ -277,6 +277,24 @@ class FreeCADAdapter(CADAdapter):
             clean_kwargs[clean_key] = v
         kwargs = clean_kwargs
 
+        # Sanitize list-typed arguments: the LLM occasionally passes JSON
+        # stringified arrays (e.g. edge_refs='["edge_1"]') instead of raw
+        # Python lists. Parse them before dispatching.
+        for list_key in ("edge_refs", "face_refs", "part_ids", "shapes"):
+            if list_key in kwargs and isinstance(kwargs[list_key], str):
+                stripped = kwargs[list_key].strip()
+                if stripped.startswith("["):
+                    parsed = None
+                    try:
+                        parsed = json.loads(stripped)
+                    except Exception:
+                        try:
+                            parsed = ast.literal_eval(stripped)
+                        except Exception:
+                            parsed = None
+                    if isinstance(parsed, list):
+                        kwargs[list_key] = parsed
+
         try:
             # Route external tools through the MCP server client instead of the
             # XML-RPC bridge. The 19 core tools continue to use the bridge below.
@@ -414,6 +432,33 @@ class FreeCADAdapter(CADAdapter):
                     flip_val = flip_val.strip().lower() in ("true", "1", "yes")
                 else:
                     flip_val = bool(flip_val)
+
+                # Parameter-synonym aliases: the LLM occasionally uses the
+                # boolean tool's naming (tool_id/target_id) or packs both
+                # subelement references into a single `references` array.
+                if not kwargs.get("moving_target") and kwargs.get("tool_id"):
+                    kwargs["moving_target"] = kwargs.pop("tool_id")
+                if not kwargs.get("fixed_target") and kwargs.get("target_id"):
+                    kwargs["fixed_target"] = kwargs.pop("target_id")
+
+                if not kwargs.get("moving_ref") or not kwargs.get("fixed_ref"):
+                    refs = kwargs.get("references")
+                    if isinstance(refs, str):
+                        try:
+                            refs = json.loads(refs)
+                        except Exception:
+                            try:
+                                refs = ast.literal_eval(refs)
+                            except Exception:
+                                refs = None
+                    if isinstance(refs, (list, tuple)):
+                        if len(refs) >= 2:
+                            if not kwargs.get("moving_ref"):
+                                kwargs["moving_ref"] = refs[0]
+                            if not kwargs.get("fixed_ref"):
+                                kwargs["fixed_ref"] = refs[1]
+                        elif len(refs) == 1 and not kwargs.get("moving_ref"):
+                            kwargs["moving_ref"] = refs[0]
 
                 return str(
                     self._proxy.mate(

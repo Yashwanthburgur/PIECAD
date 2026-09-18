@@ -59,6 +59,7 @@ from .topology import (
     _impl_get_edges,
     _impl_get_mass_properties,
     _impl_get_bom,
+    _impl_interference_check,
 )
 
 # Import primitive and boolean implementations
@@ -303,6 +304,7 @@ _IMPLEMENTATIONS = {
     "pattern_circular": _impl_pattern_circular,
     "shell": _impl_shell,
     "mate": _impl_mate,
+    "interference_check": _impl_interference_check,
     "get_mass_properties": _impl_get_mass_properties,
     "get_bom": _impl_get_bom,
     "export_model": _impl_export_model,
@@ -479,6 +481,10 @@ def mate(id, mate_type, moving_target, moving_ref, fixed_target, fixed_ref, offs
     return _execute_on_main_thread("mate", id, mate_type, moving_target, moving_ref, fixed_target, fixed_ref, offset, flip)
 
 
+def interference_check(id, part_ids=None):
+    return _execute_on_main_thread("interference_check", id, part_ids)
+
+
 def get_mass_properties(id, object_name):
     return _execute_on_main_thread("get_mass_properties", id, object_name)
 
@@ -522,6 +528,7 @@ _HANDLERS = {
     "pattern_circular": pattern_circular,
     "shell": shell,
     "mate": mate,
+    "interference_check": interference_check,
     "get_mass_properties": get_mass_properties,
     "get_bom": get_bom,
     "export_model": export_model,
