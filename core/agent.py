@@ -4,6 +4,7 @@ from typing import Optional
 from providers.llm.provider import LLMProvider
 from core.adapters.interfaces import CADAdapter
 from core.router import ToolRouter
+from core.verification.checks import check_geometry
 
 # ARCHITECTURE RULE - Object Identity: Property change on an unconsumed object -> set_param in place; Topology change -> new feature object, old one is auto-hidden (Ghost).
 
@@ -272,6 +273,31 @@ class CADAgent:
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": results[i]
+                })
+
+            # 10a. Runtime geometry verification: after a tool execution, check
+            # the NEW CAD state for degenerate geometry and feed a structured
+            # warning back to the LLM so it can self-correct.
+            try:
+                new_state_json = self.adapter.get_state()
+                new_state = json.loads(new_state_json)
+            except Exception as e:
+                print(
+                    f"[Agent] Warning: Failed to get state for verification: {e}")
+                new_state = []
+
+            errors = check_geometry(new_state)
+            if errors:
+                warning = (
+                    "WARNING: Geometry validation failed after last operation: "
+                    f"{errors}. You must use edit_feature or delete_feature to "
+                    "fix this before proceeding."
+                )
+                print(f"\033[93m[VERIFY] {warning}\033[0m")
+                # Inject the warning as context for the LLM's next reasoning step.
+                scratchpad.append({
+                    "role": "system",
+                    "content": warning,
                 })
 
             # 11. Loop repeats - do NOT return to user yet

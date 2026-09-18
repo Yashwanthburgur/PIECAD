@@ -117,3 +117,58 @@ class GeometryVerifier:
             return (x_span <= max_x) and (y_span <= max_y) and (z_span <= max_z)
         except (json.JSONDecodeError, KeyError, TypeError):
             return False
+
+
+def check_geometry(state_objects: list) -> List[str]:
+    """Inspect the CAD state for signs of degenerate geometry.
+
+    Args:
+        state_objects: Parsed CAD state (a list of object dicts). Each object
+            may carry a ``volume`` and/or an explicit invalid/null shape flag.
+
+    Returns:
+        A list of human-readable error strings describing every degenerate
+        object found. Returns an empty list if all geometry is valid.
+    """
+    errors: List[str] = []
+
+    if not isinstance(state_objects, list):
+        return errors
+
+    for obj in state_objects:
+        if not isinstance(obj, dict):
+            continue
+
+        obj_name = obj.get("id") or obj.get(
+            "label") or obj.get("name") or "unknown"
+
+        # 1. Explicitly reported volume that is non-positive.
+        volume = obj.get("volume")
+        if volume is not None:
+            try:
+                vol = float(volume)
+            except (TypeError, ValueError):
+                vol = None
+            if vol is not None and vol <= 0.0:
+                errors.append(
+                    f"Object '{obj_name}' resulted in zero/negative volume "
+                    f"({vol}) (degenerate)."
+                )
+
+        # 2. Explicit invalid or null shape flag.
+        shape_type = obj.get("shape_type")
+        is_valid = obj.get("is_valid")
+        shape_null = obj.get("shape_null")
+        if shape_null is True or is_valid is False:
+            errors.append(
+                f"Object '{obj_name}' reports an invalid or null shape "
+                f"(degenerate)."
+            )
+        elif isinstance(shape_type, str) and shape_type.lower() in (
+            "null", "invalid", "none", "empty"
+        ):
+            errors.append(
+                f"Object '{obj_name}' has shape_type '{shape_type}' (degenerate)."
+            )
+
+    return errors
