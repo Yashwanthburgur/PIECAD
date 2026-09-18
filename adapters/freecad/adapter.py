@@ -18,6 +18,7 @@ import xmlrpc.client
 
 from core.adapters.interfaces import CADAdapter
 from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell, Mate, GetMassProperties, GetBOM, ExportModel, EditFeature, InterferenceCheck
+from adapters.freecad.client import FreeCADMCPClient
 
 
 def _parse_dict_arg(arg, default_val):
@@ -37,6 +38,38 @@ class FreeCADAdapter(CADAdapter):
     def __init__(self, host: str = "127.0.0.1", port: int = 9876):
         self.url = f"http://{host}:{port}"
         self._proxy = xmlrpc.client.ServerProxy(self.url, allow_none=True)
+        # External-tool client (robust MCP server) used for tools that the core
+        # XML-RPC bridge does not implement (e.g. sketch constraints).
+        self.mcp_client = FreeCADMCPClient()
+
+    # ------------------------------------------------------------------ #
+    # External MCP tool execution (synchronous wrapper over the async client)
+    # ------------------------------------------------------------------ #
+    def _run_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Execute a tool through the external MCP server client.
+
+        Connects the client on demand, delegates to ``mcp_client.call_tool``,
+        and returns a JSON/serialized string result for the agent.
+        """
+        import asyncio
+        return asyncio.run(self._async_mcp_tool(tool_name, arguments))
+
+    async def _async_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        if self.mcp_client._session is None:
+            connected = await self.mcp_client.connect()
+            if not connected:
+                raise RuntimeError(
+                    f"Cannot connect to FreeCAD MCP server for tool '{tool_name}'."
+                )
+        result = await self.mcp_client.call_tool(tool_name, arguments)
+        # CallToolResult exposes `.content` (list of ContentBlock) and `.structuredContent`.
+        structured = getattr(result, "structuredContent", None)
+        if structured is not None:
+            return json.dumps(structured, default=str)
+        content = getattr(result, "content", None)
+        if content is not None:
+            return json.dumps([c.model_dump() if hasattr(c, "model_dump") else str(c) for c in content], default=str)
+        return str(result)
 
     # ------------------------------------------------------------------ #
     # CADAdapter.get_tools() -> WHAT the agent may request.
@@ -245,6 +278,11 @@ class FreeCADAdapter(CADAdapter):
         kwargs = clean_kwargs
 
         try:
+            # Route external tools through the MCP server client instead of the
+            # XML-RPC bridge. The 19 core tools continue to use the bridge below.
+            if tool_name == "partdesign_sketch_constraint":
+                return self._run_mcp_tool(tool_name, kwargs)
+
             if tool_name == "box":
                 # Extract parameters from IR kwargs (required fields guaranteed by schema)
                 obj_id = kwargs["id"]
@@ -605,3 +643,11 @@ class FreeCADAdapter(CADAdapter):
     def export_obj(self, filepath: str) -> str:
         """Exports the current visible CAD state to a .obj file."""
         return str(self._proxy.export_obj(filepath))
+
+    def export_state_model(self, filepath: str, format: str = "glb") -> str:
+        """Exports the current visible CAD state to GLB/glTF for the web viewer.
+
+        Uses the bridge's export_current_state, which prefers FreeCAD's native
+        glTF/GLB exporter and falls back to a standard .obj when unavailable.
+        """
+        return str(self._proxy.export_current_state(filepath, format))

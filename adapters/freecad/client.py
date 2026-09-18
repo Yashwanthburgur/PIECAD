@@ -20,6 +20,8 @@ class FreeCADMCPClient:
 
     async def connect(self) -> bool:
         """Establish STDIO transport connection to the FreeCAD MCP server."""
+        import contextlib
+
         server_params = StdioServerParameters(
             command=self.command,
             args=self.args,
@@ -30,11 +32,32 @@ class FreeCADMCPClient:
             },
         )
         try:
-            # We will manage the session lifecycle here
+            # Manage the transport/session lifecycle on an async exit stack so we
+            # can cleanly shut down stdio when disconnecting.
+            self._exit_stack = contextlib.AsyncExitStack()
+            stdin, stdout = await self._exit_stack.enter_async_context(
+                stdio_client(server_params)
+            )
+            session = await self._exit_stack.enter_async_context(ClientSession(
+                stdin, stdout
+            ))
+            await session.initialize()
+            self._session = session
             return True
         except Exception as e:
             print(f"[FreeCADMCPClient] Connection failed: {e}")
+            await self.disconnect()
             return False
+
+    async def disconnect(self) -> None:
+        """Close the STDIO transport and any open client session."""
+        if self._exit_stack is not None:
+            try:
+                await self._exit_stack.aclose()
+            except Exception as e:
+                print(f"[FreeCADMCPClient] Disconnect error: {e}")
+            self._exit_stack = None
+        self._session = None
 
     async def list_tools(self) -> List[Dict[str, Any]]:
         """Query the MCP server for available FreeCAD tools."""
@@ -46,5 +69,6 @@ class FreeCADMCPClient:
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
         """Execute a specific FreeCAD MCP tool."""
         if not self._session:
-            raise RuntimeError("MCP Client is not connected to FreeCAD server.")
+            raise RuntimeError(
+                "MCP Client is not connected to FreeCAD server.")
         return await self._session.call_tool(name, arguments)

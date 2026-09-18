@@ -3,6 +3,7 @@ import json
 from typing import Optional
 from providers.llm.provider import LLMProvider
 from core.adapters.interfaces import CADAdapter
+from core.router import ToolRouter
 
 # ARCHITECTURE RULE - Object Identity: Property change on an unconsumed object -> set_param in place; Topology change -> new feature object, old one is auto-hidden (Ghost).
 
@@ -20,6 +21,7 @@ CRITICAL RULES:
 3. FIXING ERRORS: If a user gives you a physically impossible command (e.g., Fillet radius 50 on a 20mm box) and tells you to "fix it" or "do what is suitable", you must apply the correct modification to the EXISTING object (e.g., execute a fillet with a 5mm radius on the original box). Do NOT spawn a new box.
 4. UNDO REQUESTS: If the user says "undo", look at the most recent object in the state and use `delete_feature` to remove it.
 5. CONCISENESS: Do not output long conversational apologies. Just execute the tool calls to fix the geometry.
+6. CRITICAL RULE: Once you have successfully executed the requested CAD operation, DO NOT call verification tools like `get_faces`, `get_bom`, or `get_mass_properties`. Immediately output your final text response and STOP. Do not double-check your work.
 
 GHOST OBJECT RESOLUTION:
 If a target object's `visible` property is false, it has been consumed by a downstream feature (e.g., a boolean cut). You cannot operate on a hidden ghost object. Instead, resolve to the active object in its `children` list.
@@ -108,6 +110,8 @@ class CADAgent:
     def __init__(self, adapter: CADAdapter, provider: Optional[LLMProvider] = None):
         self.adapter = adapter
         self.provider = provider or LLMProvider()
+        # Tool gating: only relevant tools are exposed to the LLM per step.
+        self.router = ToolRouter()
         # Long-term conversation history: ONLY user prompts and final agent responses
         self.history = []
 
@@ -189,8 +193,8 @@ class CADAgent:
             print(f"\n=== [ReAct Step {step+1}/{self.MAX_STEPS}] ===")
 
             # 1. Ask adapter for its active tools
-            tools = self.adapter.get_tools()
-            print(f"[Agent] Step {step+1}: {len(tools)} tools available")
+            all_tools = self.adapter.get_tools()
+            print(f"[Agent] Step {step+1}: {len(all_tools)} tools available")
 
             # 2. Get current CAD state
             try:
@@ -198,6 +202,17 @@ class CADAgent:
             except Exception as e:
                 print(f"[Agent] Warning: Failed to get state: {e}")
                 state_json = "[]"
+
+            # 2a. Parse state into objects for router-based tool gating.
+            try:
+                state_objects = json.loads(state_json)
+            except (json.JSONDecodeError, TypeError):
+                state_objects = []
+
+            # 2b. Gate the tool schemas to only those relevant to current state.
+            tools = self.router.filter_tools(all_tools, state_objects)
+            print(
+                f"[Agent] Step {step+1}: {len(tools)}/{len(all_tools)} tools active after routing")
 
             # 3. Summarize state to prevent context exhaustion (Context Guard)
             summarized_state = self._summarize_state(state_json)

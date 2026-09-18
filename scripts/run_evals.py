@@ -35,6 +35,7 @@ Design constraints (per task):
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -253,10 +254,14 @@ def run_neutral_assertions(
 
         for assertion in assertions:
             if assertion == "verify_exists":
-                # Final object must exist and have positive volume
+                # Final object must exist and have positive volume.
+                # Wrap the adapter output in json.dumps() in case it returns a
+                # raw dict (GeometryVerifier expects JSON strings).
                 try:
-                    target_mass_str = adapter.execute_command(
+                    target_mass = adapter.execute_command(
                         "get_mass_properties", id="target_verify", object_name=target_name)
+                    target_mass_str = json.dumps(
+                        target_mass) if not isinstance(target_mass, str) else target_mass
                     ok = GeometryVerifier.verify_exists(target_mass_str)
                     details.append(("verify_exists", ok))
                     if not ok:
@@ -266,18 +271,25 @@ def run_neutral_assertions(
                     results["passed"] = False
 
             elif assertion == "verify_volume_reduction":
-                # Compare base solid mass vs final solid mass
+                # Compare base solid mass vs final solid mass.
+                # The adapter may return raw dicts; GeometryVerifier expects
+                # JSON strings, so wrap outputs with json.dumps().
                 try:
-                    base_mass_str = "{}"
+                    base_mass = None
                     if base_name and base_name != target_name:
-                        base_mass_str = adapter.execute_command(
+                        base_mass = adapter.execute_command(
                             "get_mass_properties", id="base_verify", object_name=base_name)
 
-                    target_mass_str = adapter.execute_command(
+                    final_mass = adapter.execute_command(
                         "get_mass_properties", id="target_verify", object_name=target_name)
 
+                    base_mass_str = json.dumps(
+                        base_mass) if not isinstance(base_mass, str) else base_mass
+                    final_mass_str = json.dumps(
+                        final_mass) if not isinstance(final_mass, str) else final_mass
+
                     ok = GeometryVerifier.verify_volume_reduction(
-                        base_mass_str, target_mass_str)
+                        base_mass_str, final_mass_str)
                     details.append(("verify_volume_reduction", ok))
                     if not ok:
                         results["passed"] = False
@@ -286,18 +298,25 @@ def run_neutral_assertions(
                     results["passed"] = False
 
             elif assertion == "verify_face_count_increase":
-                # Compare face count of base vs final solid
+                # Compare face count of base vs final solid.
+                # Wrap adapter outputs in json.dumps() so the verifier always
+                # receives JSON strings.
                 try:
-                    base_faces_str = "[]"
+                    base_faces = None
                     if base_name and base_name != target_name:
-                        base_faces_str = adapter.execute_command(
+                        base_faces = adapter.execute_command(
                             "get_faces", id="base_faces", object_name=base_name)
 
-                    target_faces_str = adapter.execute_command(
+                    final_faces = adapter.execute_command(
                         "get_faces", id="target_faces", object_name=target_name)
 
+                    base_faces_str = json.dumps(
+                        base_faces) if not isinstance(base_faces, str) else base_faces
+                    final_faces_str = json.dumps(
+                        final_faces) if not isinstance(final_faces, str) else final_faces
+
                     ok = GeometryVerifier.verify_face_count_increase(
-                        base_faces_str, target_faces_str)
+                        base_faces_str, final_faces_str)
                     details.append(("verify_face_count_increase", ok))
                     if not ok:
                         results["passed"] = False
@@ -382,9 +401,43 @@ def evaluate_fixture(
 # --------------------------------------------------------------------------- #
 # CLI                                                                           #
 # --------------------------------------------------------------------------- #
+def _parse_args() -> "argparse.Namespace":
+    """Parse CLI arguments."""
+    parser = argparse.ArgumentParser(
+        description="PieCAD Automated Evaluation Runner"
+    )
+    parser.add_argument(
+        "--test",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help="Run ONLY the fixture whose id or name matches NAME "
+             "(e.g. --test primitive_creation). Skips all other fixtures.",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
+    args = _parse_args()
+
     fixtures_path = os.path.join(PROJECT_ROOT, "tests", "eval_fixtures.json")
     fixtures = load_fixtures(fixtures_path)
+
+    # Single-fixture mode: filter to ONLY the requested fixture.
+    if args.test:
+        wanted = args.test.strip()
+        filtered = [
+            f for f in fixtures
+            if wanted in (f.get("id"), f.get("name"))
+        ]
+        if not filtered:
+            print(f"[ERROR] No fixture found matching '{wanted}'. "
+                  f"Available: {[f.get('id') or f.get('name') for f in fixtures]}")
+            return 1
+        print(f"[--test] Running ONLY fixture matching '{wanted}' "
+              f"({len(filtered)} fixture).")
+        fixtures = filtered
+
     print(f"Loaded {len(fixtures)} fixtures from {fixtures_path}\n")
 
     # One shared recording adapter (re-wrapped per fixture for isolation).
