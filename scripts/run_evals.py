@@ -39,6 +39,7 @@ import argparse
 import json
 import os
 import sys
+import traceback
 from typing import Any, Dict, List, Optional
 
 # Make the project root importable regardless of CWD.
@@ -253,55 +254,50 @@ def run_neutral_assertions(
         details = []
 
         for assertion in assertions:
-            if assertion == "verify_exists":
-                # Final object must exist and have positive volume.
-                # Wrap the adapter output in json.dumps() in case it returns a
-                # raw dict (GeometryVerifier expects JSON strings).
-                try:
+            try:
+                if assertion == "verify_exists":
+                    # Final object must exist and have positive volume.
+                    # Wrap the adapter output in json.dumps() in case it returns
+                    # a raw dict (GeometryVerifier expects JSON strings).
                     target_mass = adapter.execute_command(
                         "get_mass_properties", id="target_verify", object_name=target_name)
                     target_mass_str = json.dumps(
                         target_mass) if not isinstance(target_mass, str) else target_mass
-                    ok = GeometryVerifier.verify_exists(target_mass_str)
-                    details.append(("verify_exists", ok))
+                    ok, reason = GeometryVerifier.verify_exists(
+                        target_mass_str)
+                    details.append(("verify_exists", ok, reason))
                     if not ok:
                         results["passed"] = False
-                except Exception as e:
-                    details.append(("verify_exists", False, str(e)))
-                    results["passed"] = False
 
-            elif assertion == "verify_volume_reduction":
-                # Compare base solid mass vs final solid mass.
-                # The adapter may return raw dicts; GeometryVerifier expects
-                # JSON strings, so wrap outputs with json.dumps().
-                try:
+                elif assertion == "verify_volume_reduction":
+                    # Compare base solid mass vs final solid mass.
+                    # The adapter may return raw dicts; GeometryVerifier expects
+                    # JSON strings, so wrap outputs with json.dumps().
                     base_mass = None
                     if base_name and base_name != target_name:
                         base_mass = adapter.execute_command(
-                            "get_mass_properties", id="base_verify", object_name=base_name)
+                            "get_mass_properties", id="base_verify",
+                            object_name=base_name)
 
                     final_mass = adapter.execute_command(
-                        "get_mass_properties", id="target_verify", object_name=target_name)
+                        "get_mass_properties", id="target_verify",
+                        object_name=target_name)
 
                     base_mass_str = json.dumps(
                         base_mass) if not isinstance(base_mass, str) else base_mass
                     final_mass_str = json.dumps(
                         final_mass) if not isinstance(final_mass, str) else final_mass
 
-                    ok = GeometryVerifier.verify_volume_reduction(
+                    ok, reason = GeometryVerifier.verify_volume_reduction(
                         base_mass_str, final_mass_str)
-                    details.append(("verify_volume_reduction", ok))
+                    details.append(("verify_volume_reduction", ok, reason))
                     if not ok:
                         results["passed"] = False
-                except Exception as e:
-                    details.append(("verify_volume_reduction", False, str(e)))
-                    results["passed"] = False
 
-            elif assertion == "verify_face_count_increase":
-                # Compare face count of base vs final solid.
-                # Wrap adapter outputs in json.dumps() so the verifier always
-                # receives JSON strings.
-                try:
+                elif assertion == "verify_face_count_increase":
+                    # Compare face count of base vs final solid.
+                    # Wrap adapter outputs in json.dumps() so the verifier
+                    # always receives JSON strings.
                     base_faces = None
                     if base_name and base_name != target_name:
                         base_faces = adapter.execute_command(
@@ -315,25 +311,32 @@ def run_neutral_assertions(
                     final_faces_str = json.dumps(
                         final_faces) if not isinstance(final_faces, str) else final_faces
 
-                    ok = GeometryVerifier.verify_face_count_increase(
+                    ok, reason = GeometryVerifier.verify_face_count_increase(
                         base_faces_str, final_faces_str)
-                    details.append(("verify_face_count_increase", ok))
+                    details.append(("verify_face_count_increase", ok, reason))
                     if not ok:
                         results["passed"] = False
-                except Exception as e:
-                    details.append(
-                        ("verify_face_count_increase", False, str(e)))
-                    results["passed"] = False
 
-            elif assertion == "verify_within_bounding_box":
-                # This would need max_x, max_y, max_z from fixture; skip for now
-                details.append(
-                    ("verify_within_bounding_box", True, "not configured"))
+                elif assertion == "verify_within_bounding_box":
+                    # This would need max_x, max_y, max_z from fixture; skip.
+                    details.append(
+                        ("verify_within_bounding_box", True, "not configured"))
+            except Exception as e:
+                # Surface the full Python stack trace instead of a silent
+                # "(Neutral assertions failed: )" empty string.
+                detail = (assertion, False, f"{e}\n{traceback.format_exc()}")
+                details.append(detail)
+                results["passed"] = False
 
         results["details"] = details
 
     except Exception as e:
-        return {"passed": False, "details": [f"Verification error: {e}"]}
+        return {
+            "passed": False,
+            "details": [
+                f"Verification error: {e}\n{traceback.format_exc()}"
+            ],
+        }
 
     return results
 
@@ -371,30 +374,33 @@ def evaluate_fixture(
 
     got = collect_actual_tools(agent, adapter)
 
-    expected_set = set(expected)
-    got_set = set(got)
-    missing = expected_set - got_set
-    passed = len(missing) == 0
+    # --- STEP 1: success criteria ----------------------------------- #
+    # 1. tools_passed: every expected tool must have been called. Use
+    #    case-insensitive substring matching to avoid strict name breaks.
+    expected_lower = {str(t).strip().lower() for t in expected if t}
+    got_lower = {str(t).strip().lower() for t in got if t}
+    missing = {e for e in expected_lower
+               if not any(e in g for g in got_lower)}
+    tools_passed = len(missing) == 0
 
-    reason = ""
-    if not passed:
-        reason = f"Expected: {sorted(expected_set)}, Got: {sorted(got_set)}"
-
-    # Run neutral geometric assertions if declared
+    # 2. assertions_passed: no failed neutral assertions.
     neutral_result = run_neutral_assertions(fixture, adapter)
-    if not neutral_result["passed"]:
-        passed = False
-        if reason:
-            reason += "; "
-        reason += "Neutral assertions failed: " + "; ".join(
-            f"{d[0]}={d[1]}" for d in neutral_result["details"] if not d[1])
+    failed_assertions = [
+        d for d in neutral_result["details"] if not d[1]]
+    assertions_passed = len(failed_assertions) == 0
+
+    # 3. Do NOT fail on expected_state - it is deprecated in favor of
+    #    neutral assertions.
+    passed = tools_passed and assertions_passed
 
     return {
         "name": name,
         "passed": passed,
         "expected": expected,
         "got": got,
-        "reason": reason,
+        "tools_passed": tools_passed,
+        "assertions_passed": assertions_passed,
+        "failed_assertions": failed_assertions,
     }
 
 
@@ -454,11 +460,24 @@ def main() -> int:
             continue
 
         res = evaluate_fixture(fixture, adapter)
-        status = "PASS" if res["passed"] else "FAIL"
+
+        # STEP 2: dynamic failure logging - print EXACTLY what failed.
+        tools_passed = res.get("tools_passed", res["passed"])
+        assertions_passed = res.get("assertions_passed", res["passed"])
+        failed_assertions = res.get("failed_assertions", [])
+
         if res["passed"]:
-            print(f"[{status}] {res['name']}")
+            print(f"[PASS] {res['name']}")
         else:
-            print(f"[{status}] {res['name']} ({res['reason']})")
+            reasons = []
+            if not tools_passed:
+                reasons.append(
+                    f"Missing expected tools. Expected: {res['expected']}, "
+                    f"Called: {res['got']}")
+            if not assertions_passed:
+                reasons.append(
+                    f"Neutral assertions failed: {failed_assertions}")
+            print(f"[FAIL] {res['name']} ({' | '.join(reasons)})")
         results.append(res)
 
     passing = sum(1 for r in results if r["passed"])

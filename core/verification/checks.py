@@ -20,7 +20,7 @@ class GeometryVerifier:
     """
 
     @staticmethod
-    def verify_exists(final_mass_json: str) -> bool:
+    def verify_exists(final_mass_json: str):
         """
         Verify that a final solid exists and has positive volume.
 
@@ -28,18 +28,27 @@ class GeometryVerifier:
             final_mass_json: JSON from get_mass_properties on the final solid.
 
         Returns:
-            True if the JSON parses and its Volume is strictly greater than 0.0,
-            False otherwise (including parse errors).
+            A tuple ``(bool, reason)``. The bool is True if the JSON parses and
+            its Volume is strictly greater than 0.0, False otherwise. ``reason``
+            is a specific human-readable string explaining any failure.
         """
         try:
             data = json.loads(final_mass_json)
-            volume = data.get("Volume", 0.0)
-            return volume > 0.0
-        except (json.JSONDecodeError, AttributeError, TypeError, KeyError):
-            return False
+        except (json.JSONDecodeError, AttributeError, TypeError, KeyError) as e:
+            return False, f"final_mass_json did not parse as JSON: {e}"
+        if not isinstance(data, dict):
+            return False, f"Expected a dict from get_mass_properties, got {type(data).__name__}"
+        volume = data.get("Volume", data.get("volume", 0.0))
+        try:
+            volume = float(volume)
+        except (TypeError, ValueError):
+            volume = 0.0
+        if volume <= 0.0:
+            return False, f"Volume {volume} was not > 0 (degenerate/empty solid)."
+        return True, "solid exists with positive volume"
 
     @staticmethod
-    def verify_volume_reduction(base_mass_json: str, cut_mass_json: str) -> bool:
+    def verify_volume_reduction(base_mass_json: str, cut_mass_json: str):
         """
         Verify that a boolean subtraction/hole operation actually removed material.
 
@@ -48,22 +57,29 @@ class GeometryVerifier:
             cut_mass_json: JSON from get_mass_properties on the resulting solid (after cut).
 
         Returns:
-            True if volume strictly decreased, False otherwise (including parse errors).
+            A tuple ``(bool, reason)``. True if volume strictly decreased, False
+            otherwise (including parse errors), with a specific reason string.
         """
         try:
             base = json.loads(base_mass_json)
             cut = json.loads(cut_mass_json)
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            return False, f"base/cut mass JSON did not parse: {e}"
+        if not isinstance(base, dict) or not isinstance(cut, dict):
+            return False, "base/cut mass properties were not dicts"
+        base_vol = float(base.get("volume", 0.0))
+        cut_vol = float(cut.get("volume", 0.0))
 
-            base_vol = base.get("volume", 0.0)
-            cut_vol = cut.get("volume", 0.0)
-
-            # Volume must be strictly less after a cut operation
-            return cut_vol < base_vol
-        except (json.JSONDecodeError, KeyError, TypeError):
-            return False
+        # Volume must be strictly less after a cut operation
+        if not (cut_vol < base_vol):
+            return False, (
+                f"Volume {cut_vol} did not decrease below base {base_vol}"
+                "(material may not have been removed)."
+            )
+        return True, f"volume reduced from {base_vol} to {cut_vol}"
 
     @staticmethod
-    def verify_face_count_increase(base_faces_json: str, op_faces_json: str) -> bool:
+    def verify_face_count_increase(base_faces_json: str, op_faces_json: str):
         """
         Verify that an operation (chamfer, fillet, patterned holes) increased face count.
 
@@ -72,18 +88,22 @@ class GeometryVerifier:
             op_faces_json: JSON from get_faces on the operated solid.
 
         Returns:
-            True if face count strictly increased, False otherwise.
+            A tuple ``(bool, reason)``. True if face count strictly increased,
+            False otherwise, with a specific reason string.
         """
         try:
             base_faces = json.loads(base_faces_json)
             op_faces = json.loads(op_faces_json)
-
-            base_count = len(base_faces) if isinstance(base_faces, list) else 0
-            op_count = len(op_faces) if isinstance(op_faces, list) else 0
-
-            return op_count > base_count
-        except (json.JSONDecodeError, TypeError):
-            return False
+        except (json.JSONDecodeError, TypeError) as e:
+            return False, f"face JSON did not parse: {e}"
+        base_count = len(base_faces) if isinstance(base_faces, list) else 0
+        op_count = len(op_faces) if isinstance(op_faces, list) else 0
+        if not (op_count > base_count):
+            return False, (
+                f"Face count {op_count} did not increase above base {base_count}"
+                "(operation may not have applied)."
+            )
+        return True, f"face count increased from {base_count} to {op_count}"
 
     @staticmethod
     def verify_within_bounding_box(part_mass_json: str, max_x: float, max_y: float, max_z: float) -> bool:
