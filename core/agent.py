@@ -22,7 +22,8 @@ CRITICAL RULES:
 3. FIXING ERRORS: If a user gives you a physically impossible command (e.g., Fillet radius 50 on a 20mm box) and tells you to "fix it" or "do what is suitable", you must apply the correct modification to the EXISTING object (e.g., execute a fillet with a 5mm radius on the original box). Do NOT spawn a new box.
 4. UNDO REQUESTS: If the user says "undo", look at the most recent object in the state and use `delete_feature` to remove it.
 5. CONCISENESS: Do not output long conversational apologies. Just execute the tool calls to fix the geometry.
-6. CRITICAL RULE: Once you have successfully executed the requested CAD operation, DO NOT call verification tools like `get_faces`, `get_bom`, or `get_mass_properties`. Immediately output your final text response and STOP. Do not double-check your work.
+6. CRITICAL RULE: Do not stop until you have completely fulfilled ALL steps of the user's requested design. If the user asks for a box WITH a shell, you must execute both tools. Once the ENTIRE final shape is built, DO NOT call verification tools like get_faces, get_bom, or get_mass_properties. Immediately output your final text response and STOP.
+7. CRITICAL RULE: If a tool like 'shell' or 'mate' is missing from your available tools, DO NOT hallucinate it. It means you must first use primitive tools (like 'box' or 'cylinder') to create solid objects. The advanced tools will automatically unlock in the next step once the base geometry exists.
 
 GHOST OBJECT RESOLUTION:
 If a target object's `visible` property is false, it has been consumed by a downstream feature (e.g., a boolean cut). You cannot operate on a hidden ghost object. Instead, resolve to the active object in its `children` list.
@@ -171,7 +172,7 @@ class CADAgent:
         # Fallback: return as-is
         return state_str
 
-    def handle_message(self, user_message: str) -> str:
+    def handle_message(self, user_message: str):
         """Process a user message using a ReAct scratchpad pattern.
 
         Long-term memory (self.history): Stores ONLY user prompts and final agent responses.
@@ -188,6 +189,9 @@ class CADAgent:
 
         # Short-term scratchpad for this ReAct loop execution
         scratchpad = []
+
+        # Accumulates every tool the agent executed across this session/prompt.
+        session_tools: list = []
 
         # Multi-step ReAct loop: max 10 steps to prevent infinite looping
         for step in range(self.MAX_STEPS):
@@ -239,7 +243,7 @@ class CADAgent:
                     f"[Agent] Finished reasoning (no tool calls). Final response: {reply}")
                 # Append final response to long-term history
                 self.history.append({"role": "assistant", "content": reply})
-                return reply
+                return reply, session_tools
 
             # 8. LLM returned tool calls - append assistant message to scratchpad
             scratchpad.append({
@@ -254,6 +258,8 @@ class CADAgent:
             for tc in response.tool_calls:
                 name = tc.function.name
                 args = json.loads(tc.function.arguments)
+                # Record this session's tool usage.
+                session_tools.append(name)
                 print(
                     f"[Execution] Step {step+1}: Tool '{name}' with args: {args}")
                 try:
@@ -309,4 +315,4 @@ class CADAgent:
         print(f"\033[91m[ERROR] {fail_msg}\033[0m")
         # Append failure message to long-term history
         self.history.append({"role": "assistant", "content": fail_msg})
-        return fail_msg
+        return fail_msg, session_tools

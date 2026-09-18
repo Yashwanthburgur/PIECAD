@@ -175,9 +175,16 @@ def extract_tools_from_history(history: List[Dict[str, Any]]) -> List[str]:
     return tools
 
 
-def collect_actual_tools(agent: "CADAgent", adapter: "RecordingAdapter") -> List[str]:
-    """Union of adapter-recorded tools and any tool_calls found in history."""
-    actual = list(adapter.called_tools)
+def collect_actual_tools(
+    called_tools: List[str], agent: "CADAgent"
+) -> List[str]:
+    """Merge the agent's session tools with any tool_calls found in history.
+
+    ``called_tools`` is the authoritative list returned by
+    ``agent.handle_message`` (the deprecated ``adapter.called_tools`` is no
+    longer read).
+    """
+    actual = list(called_tools)
     actual.extend(extract_tools_from_history(
         getattr(agent, "history", []) or []))
     # De-duplicate while preserving first-seen order.
@@ -351,8 +358,7 @@ def evaluate_fixture(
     prompt = fixture["prompt"]
     expected = list(fixture.get("expected_tools_called", []) or [])
 
-    # Fresh agent + cleared adapter recording buffer for isolation.
-    adapter.called_tools = []
+    # Fresh agent for isolation.
     agent = CADAgent(adapter=adapter)
 
     try:
@@ -362,7 +368,9 @@ def evaluate_fixture(
         pass
 
     try:
-        agent.handle_message(prompt)
+        # handle_message returns (response_text, session_tools); unpack the
+        # tools the agent actually invoked across the whole session.
+        final_response, called_tools = agent.handle_message(prompt)
     except Exception as exc:
         return {
             "name": name,
@@ -372,7 +380,7 @@ def evaluate_fixture(
             "reason": f"agent.handle_message raised {type(exc).__name__}: {exc}",
         }
 
-    got = collect_actual_tools(agent, adapter)
+    got = collect_actual_tools(called_tools, agent)
 
     # --- STEP 1: success criteria ----------------------------------- #
     # 1. tools_passed: every expected tool must have been called. Use

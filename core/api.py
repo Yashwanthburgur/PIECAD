@@ -46,7 +46,9 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
-    return ChatResponse(reply=agent.handle_message(request.message))
+    # handle_message now returns (response_text, session_tools); take the text.
+    reply, _session_tools = agent.handle_message(request.message)
+    return ChatResponse(reply=reply)
 
 
 @app.get("/api/state/obj")
