@@ -68,7 +68,7 @@ from .features import _impl_fillet, _impl_chamfer, _impl_shell, _impl_edit_featu
 from .sketch import _impl_sketch, _impl_extrude
 from .patterns import _impl_pattern_linear, _impl_pattern_circular
 from .assembly import _impl_mate
-from .export import _impl_export_model
+from .export import _impl_export_model, export_current_state as _impl_export_current_state
 
 # Dynamically resolve project root (two levels up from this file's directory)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -306,6 +306,7 @@ _IMPLEMENTATIONS = {
     "get_mass_properties": _impl_get_mass_properties,
     "get_bom": _impl_get_bom,
     "export_model": _impl_export_model,
+    "export_current_state": _impl_export_current_state,
 }
 
 
@@ -490,6 +491,10 @@ def export_model(id, format_type, filepath):
     return _execute_on_main_thread("export_model", id, format_type, filepath)
 
 
+def export_current_state(filepath, format="glb"):
+    return _execute_on_main_thread("export_current_state", filepath, format)
+
+
 def edit_feature(id, target_id, parameters):
     return _execute_on_main_thread("edit_feature", id, target_id, parameters)
 
@@ -520,6 +525,7 @@ _HANDLERS = {
     "get_mass_properties": get_mass_properties,
     "get_bom": get_bom,
     "export_model": export_model,
+    "export_current_state": export_current_state,
 }
 
 
