@@ -2,6 +2,7 @@
 """Test script to verify MCP client can connect and discover tools."""
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -23,6 +24,7 @@ print(
 async def main():
     # Import inside main to ensure sys.path is already set
     from adapters.freecad.client import FreeCADMCPClient
+    from adapters.freecad.mcp_translator import translate_mcp_to_openai
 
     """Connect to MCP server, fetch tools, and print count."""
     print("[test_mcp_discovery] Starting FreeCADMCPClient...")
@@ -46,6 +48,14 @@ async def main():
         # Print tool names for verification
         for tool in tools:
             print(f"  - {tool['name']}: {tool['description'][:80]}...")
+
+        # Translate the first tool to OpenAI format
+        if tools:
+            first_tool = tools[0]
+            print(
+                f"\n[test_mcp_discovery] Translating first tool '{first_tool['name']}' to OpenAI schema...")
+            openai_schema = translate_mcp_to_openai(first_tool)
+            print(json.dumps(openai_schema, indent=2))
 
         await client.disconnect()
         print("[test_mcp_discovery] Disconnected cleanly.")
