@@ -37,6 +37,9 @@ import uuid
 import threading
 import queue
 import os
+import io
+import traceback
+import contextlib
 from pathlib import Path
 
 import Part
@@ -73,6 +76,160 @@ from .export import _impl_export_model, export_current_state as _impl_export_cur
 
 # Dynamically resolve project root (two levels up from this file's directory)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+# --------------------------------------------------------------------------- #
+# Ping & Execute (for MCP server compatibility)
+# --------------------------------------------------------------------------- #
+
+
+def ping():
+    """Health check for MCP server. Returns True if bridge is responsive."""
+    return True
+
+
+def execute(code: str):
+    """Execute Python code in a sandboxed environment for MCP server compatibility.
+
+    This provides a restricted execution environment that allows FreeCAD geometry
+    operations while blocking dangerous builtins and OS-level access.
+
+    Args:
+        code: Python code string to execute. Should assign result to `_result_` variable.
+
+    Returns:
+        Dict with keys: success (bool), result (any), stdout (str), stderr (str)
+    """
+    # Restricted builtins - disable dangerous functions
+    safe_builtins = {
+        # Basic types and safe functions
+        "bool": bool,
+        "int": int,
+        "float": float,
+        "str": str,
+        "list": list,
+        "tuple": tuple,
+        "dict": dict,
+        "set": set,
+        "frozenset": frozenset,
+        "len": len,
+        "range": range,
+        "enumerate": enumerate,
+        "zip": zip,
+        "map": map,
+        "filter": filter,
+        "sum": sum,
+        "min": min,
+        "max": max,
+        "abs": abs,
+        "round": round,
+        "pow": pow,
+        "divmod": divmod,
+        "all": all,
+        "any": any,
+        "isinstance": isinstance,
+        "issubclass": issubclass,
+        "hasattr": hasattr,
+        "getattr": getattr,
+        "setattr": setattr,
+        "delattr": delattr,
+        "type": type,
+        "object": object,
+        "slice": slice,
+        "property": property,
+        "staticmethod": staticmethod,
+        "classmethod": classmethod,
+        "print": print,
+        "repr": repr,
+        "format": format,
+        "ord": ord,
+        "chr": chr,
+        "hex": hex,
+        "oct": oct,
+        "bin": bin,
+        "id": id,
+        "hash": hash,
+        "iter": iter,
+        "next": next,
+        "reversed": reversed,
+        "sorted": sorted,
+        "vars": vars,
+        "dir": dir,
+        "callable": callable,
+        "Exception": Exception,
+        "BaseException": BaseException,
+        "ValueError": ValueError,
+        "TypeError": TypeError,
+        "RuntimeError": RuntimeError,
+        "AttributeError": AttributeError,
+        "KeyError": KeyError,
+        "IndexError": IndexError,
+        "StopIteration": StopIteration,
+        "NotImplementedError": NotImplementedError,
+        "NameError": NameError,
+        "ImportError": ImportError,
+        "KeyboardInterrupt": KeyboardInterrupt,
+        "SystemExit": SystemExit,
+        "ZeroDivisionError": ZeroDivisionError,
+        "ArithmeticError": ArithmeticError,
+        "AssertionError": AssertionError,
+        "BufferError": BufferError,
+        "EOFError": EOFError,
+        "GeneratorExit": GeneratorExit,
+        "MemoryError": MemoryError,
+        "OSError": OSError,
+        "OverflowError": OverflowError,
+        "RecursionError": RecursionError,
+        "ReferenceError": ReferenceError,
+        "SyntaxError": SyntaxError,
+        "SystemError": SystemError,
+        "UnicodeError": UnicodeError,
+        "Warning": Warning,
+    }
+
+    # Construct restricted globals
+    restricted_globals = {
+        "__builtins__": safe_builtins,
+        # FreeCAD modules
+        "FreeCAD": App,
+        "App": App,
+        "Part": Part,
+        "Draft": __import__("Draft") if "Draft" not in globals() else globals()["Draft"],
+        "math": __import__("math"),
+    }
+
+    # Capture stdout/stderr
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+
+    try:
+        with contextlib.redirect_stdout(stdout_capture):
+            with contextlib.redirect_stderr(stderr_capture):
+                # Execute the code
+                local_vars = {}
+                exec(code, restricted_globals, local_vars)
+
+        # Extract _result_ from locals
+        result = local_vars.get("_result_", None)
+
+        return {
+            "success": True,
+            "result": result,
+            "stdout": stdout_capture.getvalue(),
+            "stderr": stderr_capture.getvalue(),
+        }
+
+    except Exception as e:
+        # Capture full traceback
+        tb_str = traceback.format_exc()
+        stderr_capture.write(tb_str)
+
+        return {
+            "success": False,
+            "result": None,
+            "stdout": stdout_capture.getvalue(),
+            "stderr": stderr_capture.getvalue(),
+        }
 
 
 # --------------------------------------------------------------------------- #
@@ -506,6 +663,10 @@ def edit_feature(id, target_id, parameters):
 
 
 _HANDLERS = {
+    # MCP server compatibility
+    "ping": ping,
+    "execute": execute,
+    # Geometry operations
     "create_box": create_box,
     "create_cylinder": create_cylinder,
     "boolean": boolean,
