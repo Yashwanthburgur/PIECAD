@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 import asyncio
+import os
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -22,14 +23,20 @@ class FreeCADMCPClient:
         """Establish STDIO transport connection to the FreeCAD MCP server."""
         import contextlib
 
+        # Inherit system environment and set correct XML-RPC port (9876)
+        env = os.environ.copy()
+        env.update({
+            "FREECAD_MODE": "xmlrpc",
+            "FREECAD_XMLRPC_PORT": "9876",
+            "MODE": "xmlrpc",
+            "XMLRPC_PORT": "9876",
+            "PYTHONUNBUFFERED": "1",
+        })
+
         server_params = StdioServerParameters(
             command=self.command,
             args=self.args,
-            env={
-                "FREECAD_MODE": "xmlrpc",
-                "FREECAD_SOCKET_HOST": "localhost",
-                "FREECAD_XMLRPC_PORT": "9875",
-            },
+            env=env,
         )
         try:
             # Manage the transport/session lifecycle on an async exit stack so we
