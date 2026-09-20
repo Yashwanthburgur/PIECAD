@@ -11,6 +11,7 @@ actually executed). Core never sees FreeCAD internals.
 import json
 import ast
 import re
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -19,6 +20,7 @@ import xmlrpc.client
 from core.adapters.interfaces import CADAdapter
 from core.contracts.ir import Box, Cylinder, Boolean, DeleteFeature, Hole, Sketch, Extrude, Fillet, Chamfer, LinearPattern, CircularPattern, Shell, Mate, GetMassProperties, GetBOM, ExportModel, EditFeature, InterferenceCheck
 from adapters.freecad.client import FreeCADMCPClient
+from adapters.freecad.mcp_translator import translate_mcp_to_openai
 
 
 def _parse_dict_arg(arg, default_val):
@@ -41,6 +43,8 @@ class FreeCADAdapter(CADAdapter):
         # External-tool client (robust MCP server) used for tools that the core
         # XML-RPC bridge does not implement (e.g. sketch constraints).
         self.mcp_client = FreeCADMCPClient()
+        # Tool cache to avoid repeated MCP server launches
+        self._cached_tools: List[Dict[str, Any]] | None = None
 
     # ------------------------------------------------------------------ #
     # External MCP tool execution (synchronous wrapper over the async client)
@@ -74,8 +78,8 @@ class FreeCADAdapter(CADAdapter):
     # ------------------------------------------------------------------ #
     # CADAdapter.get_tools() -> WHAT the agent may request.
     # ------------------------------------------------------------------ #
-    def get_tools(self) -> List[Dict[str, Any]]:
-        """Return OpenAI-compatible function schemas for the 4 core operations."""
+    def _get_local_tools(self) -> List[Dict[str, Any]]:
+        """Return the hardcoded local OpenAI-compatible tool schemas."""
         return [
             {
                 "type": "function",
@@ -256,6 +260,57 @@ class FreeCADAdapter(CADAdapter):
                 }
             },
         ]
+
+    def _fetch_mcp_tools(self) -> List[Dict[str, Any]]:
+        """Fetch and translate tools from the MCP server."""
+        try:
+            # Use asyncio.run to bridge sync-to-async
+            return asyncio.run(self._async_fetch_mcp_tools())
+        except Exception as e:
+            print(f"[FreeCADAdapter] Warning: MCP server unreachable - {e}")
+            return []
+
+    async def _async_fetch_mcp_tools(self) -> List[Dict[str, Any]]:
+        """Async helper to fetch and translate MCP tools."""
+        client = FreeCADMCPClient()
+        try:
+            connected = await client.connect()
+            if not connected:
+                return []
+
+            mcp_tools = await client.list_tools()
+            # Translate each tool to OpenAI format
+            translated = [translate_mcp_to_openai(tool) for tool in mcp_tools]
+            return translated
+        except Exception as e:
+            print(f"[FreeCADAdapter] Warning: MCP tool fetch failed - {e}")
+            return []
+        finally:
+            await client.disconnect()
+
+    def get_tools(self) -> List[Dict[str, Any]]:
+        """Return merged tool schemas: local tools + MCP tools (deduplicated)."""
+        # Return cached result if available
+        if self._cached_tools is not None:
+            return self._cached_tools
+
+        # Get local tools
+        local_tools = self._get_local_tools()
+
+        # Get MCP tools
+        mcp_tools = self._fetch_mcp_tools()
+
+        # Merge: local tools take priority (by name)
+        local_names = {tool["function"]["name"] for tool in local_tools}
+        merged = list(local_tools)
+        for mcp_tool in mcp_tools:
+            mcp_name = mcp_tool["function"]["name"]
+            if mcp_name not in local_names:
+                merged.append(mcp_tool)
+
+        # Cache and return
+        self._cached_tools = merged
+        return merged
 
     # ------------------------------------------------------------------ #
     # CADAdapter.execute_command() -> HOW the request is executed.
