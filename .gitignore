@@ -10,6 +10,12 @@ venv/
 *.FCStd2
 *.lock
 
+# Generated CAD / Export artifacts
+current_state.obj
+exports/*.step
+exports/*.stl
+exports/*.glb
+
 # OS & Editors
 .DS_Store
 Thumbs.db
