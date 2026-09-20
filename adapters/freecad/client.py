@@ -71,7 +71,33 @@ class FreeCADMCPClient:
         if not self._session:
             return []
         response = await self._session.list_tools()
-        return [{"name": t.name, "description": t.description, "inputSchema": t.inputSchema} for t in response.tools]
+        tools = []
+        for t in response.tools:
+            # The installed MCP SDK exposes input schema as `input_schema`
+            # (snake_case, a JSON-Schema dict). Older SDK versions pull from
+            # `inputSchema`. Support both.
+            input_schema = getattr(t, "input_schema", None)
+            if input_schema is None:
+                input_schema = getattr(t, "inputSchema", None)
+            # Normalize pydantic/dict schema to a plain dict.
+            if not isinstance(input_schema, dict):
+                dump = getattr(input_schema, "model_dump", None)
+                if callable(dump):
+                    try:
+                        input_schema = dump()
+                    except Exception:
+                        input_schema = {}
+                elif input_schema is not None and hasattr(input_schema, "dict"):
+                    try:
+                        input_schema = input_schema.dict()
+                    except Exception:
+                        input_schema = {}
+            tools.append({
+                "name": t.name,
+                "description": t.description,
+                "inputSchema": input_schema or {},
+            })
+        return tools
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
         """Execute a specific FreeCAD MCP tool."""
