@@ -19,6 +19,7 @@ class LLMProvider:
     ):
         raw_key = (
             api_key
+            or os.getenv("DEEPSEEK_API_KEY")
             or os.getenv("GROQ_API_KEY")
             or os.getenv("API_KEY")
             or os.getenv("OPENAI_API_KEY")
