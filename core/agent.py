@@ -109,13 +109,22 @@ class CADAgent:
     MAX_RETRIES = 3
     MAX_STEPS = 15
 
-    def __init__(self, adapter: CADAdapter, provider: Optional[LLMProvider] = None):
+    def __init__(
+        self,
+        adapter: CADAdapter,
+        provider: Optional[LLMProvider] = None,
+        *,
+        capture_trace: bool = False,
+    ):
         self.adapter = adapter
         self.provider = provider or LLMProvider()
         # Tool gating: only relevant tools are exposed to the LLM per step.
         self.router = ToolRouter()
         # Long-term conversation history: ONLY user prompts and final agent responses
         self.history = []
+        # Evaluation instrumentation (opt-in)
+        self._capture_trace = capture_trace
+        self._trace: list = []
 
     def _is_transient_error(self, error: RuntimeError) -> bool:
         """Return True if the RuntimeError wraps a transient connection/transport failure.
@@ -193,6 +202,9 @@ class CADAgent:
         Long-term memory (self.history): Stores ONLY user prompts and final agent responses.
         Short-term scratchpad (local variable): Stores ReAct loop internals (tool calls, results).
         The scratchpad is discarded after each handle_message call, keeping history clean.
+
+        If capture_trace=True (evaluation mode), a detailed execution trace is recorded
+        and can be retrieved via get_trace() after the call returns.
         """
         # Prevent unbounded context growth (keep last 20 messages max)
         MAX_HISTORY = 20
@@ -207,6 +219,10 @@ class CADAgent:
 
         # Accumulates every tool the agent executed across this session/prompt.
         session_tools: list = []
+
+        # Evaluation trace (opt-in)
+        if self._capture_trace:
+            self._trace = []
 
         # Multi-step ReAct loop: max 10 steps to prevent infinite looping
         for step in range(self.MAX_STEPS):
@@ -232,7 +248,8 @@ class CADAgent:
             # 2b. Gate the tool schemas to only those relevant to current state.
             tools = self.router.filter_tools(all_tools, state_objects)
             print(
-                f"[Agent] Step {step+1}: {len(tools)}/{len(all_tools)} tools active after routing")
+                f"[Agent] Step {step+1}: {len(tools)}/{len(all_tools)} tools active after routing"
+            )
 
             # 3. Summarize state to prevent context exhaustion (Context Guard)
             summarized_state = self._summarize_state(state_json)
@@ -258,6 +275,13 @@ class CADAgent:
                     f"[Agent] Finished reasoning (no tool calls). Final response: {reply}")
                 # Append final response to long-term history
                 self.history.append({"role": "assistant", "content": reply})
+                if self._capture_trace:
+                    self._trace.append({
+                        "step": step + 1,
+                        "type": "completion",
+                        "reply": reply,
+                        "termination_reason": "no_tool_calls",
+                    })
                 return reply, session_tools
 
             # 8. LLM returned tool calls - append assistant message to scratchpad
@@ -280,11 +304,15 @@ class CADAgent:
 
                 # Retry transient connection/transport failures up to MAX_RETRIES
                 out = None
+                error = None
+                success = False
                 for attempt in range(self.MAX_RETRIES + 1):
                     try:
                         out = self.adapter.execute_command(name, **args)
+                        success = True
                         break
                     except (ConnectionError, OSError) as e:
+                        error = e
                         if attempt < self.MAX_RETRIES:
                             print(
                                 f"[Retry] Step {step+1}: Tool '{name}' attempt {attempt + 1} failed with transient error: {e}. Retrying...")
@@ -292,6 +320,7 @@ class CADAgent:
                         # Exhausted retries - re-raise to be caught below
                         raise
                     except RuntimeError as e:
+                        error = e
                         # Check if it's a wrapped connection/transport error
                         if self._is_transient_error(e) and attempt < self.MAX_RETRIES:
                             print(
@@ -308,8 +337,22 @@ class CADAgent:
                     # This should not happen, but handle gracefully
                     error_msg = f"Execution error on {name}: unknown error after retries"
                     results.append(error_msg)
+                    success = False
+                    error = RuntimeError(error_msg)
                     print(
                         f"\033[91m[ERROR] Step {step+1}: Tool '{name}' failed: {error_msg}\033[0m")
+
+                # Record trace entry if capture_trace is enabled
+                if self._capture_trace:
+                    self._trace.append({
+                        "step": step + 1,
+                        "tool": name,
+                        "arguments": args,
+                        "result": out if out is not None else (str(error) if error else error_msg),
+                        "success": success,
+                        "error": str(error) if error and not success else None,
+                        "attempt": attempt + 1 if 'attempt' in locals() else 1,
+                    })
 
             # 10. Append tool results to scratchpad as tool messages
             for i, tc in enumerate(response.tool_calls):
@@ -343,6 +386,12 @@ class CADAgent:
                     "role": "system",
                     "content": warning,
                 })
+                if self._capture_trace:
+                    self._trace.append({
+                        "step": step + 1,
+                        "type": "geometry_warning",
+                        "errors": errors,
+                    })
 
             # 11. Loop repeats - do NOT return to user yet
             print(
@@ -353,4 +402,18 @@ class CADAgent:
         print(f"\033[91m[ERROR] {fail_msg}\033[0m")
         # Append failure message to long-term history
         self.history.append({"role": "assistant", "content": fail_msg})
+        if self._capture_trace:
+            self._trace.append({
+                "step": self.MAX_STEPS,
+                "type": "max_steps_exhausted",
+                "message": fail_msg,
+                "termination_reason": "max_steps",
+            })
         return fail_msg, session_tools
+
+    def get_trace(self) -> list:
+        """Return the captured ReAct execution trace (evaluation mode only).
+
+        Returns an empty list if capture_trace was not enabled.
+        """
+        return self._trace if self._capture_trace else []
