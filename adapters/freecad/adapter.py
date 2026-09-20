@@ -288,6 +288,57 @@ class FreeCADAdapter(CADAdapter):
         finally:
             await client.disconnect()
 
+    def _execute_mcp_tool(self, name: str, args: Dict[str, Any]) -> str:
+        """Execute a tool through the external MCP server client.
+
+        Uses a synchronous wrapper over the async client and returns the
+        serialized MCP response. Disconnects the client cleanly after use.
+        On failure returns a JSON failure dict.
+        """
+        try:
+            return asyncio.run(self._async_execute_mcp_tool(name, args))
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return json.dumps({"success": False, "error": str(e)})
+
+    async def _async_execute_mcp_tool(self, name: str, args: Dict[str, Any]) -> str:
+        """Async helper to execute an MCP tool and normalize its response."""
+        client = FreeCADMCPClient()
+        try:
+            connected = await client.connect()
+            if not connected:
+                raise RuntimeError(
+                    f"Cannot connect to FreeCAD MCP server for tool '{name}'."
+                )
+
+            # Standard MCP protocol call
+            result = await client.call_tool(name, args)
+
+            # Extract the actual text/JSON result from the MCP response object.
+            structured = getattr(result, "structuredContent", None)
+            if structured is not None:
+                return json.dumps(structured, default=str)
+
+            content = getattr(result, "content", None)
+            if content is not None:
+                parts = []
+                for c in content:
+                    if hasattr(c, "text") and c.text is not None:
+                        parts.append(c.text)
+                    elif hasattr(c, "model_dump"):
+                        parts.append(
+                            json.dumps(c.model_dump(
+                                exclude_none=True), default=str)
+                        )
+                    else:
+                        parts.append(str(c))
+                return "\n".join(parts)
+
+            return str(result)
+        finally:
+            await client.disconnect()
+
     def get_tools(self) -> List[Dict[str, Any]]:
         """Return merged tool schemas: local tools + MCP tools (deduplicated)."""
         # Return cached result if available
@@ -349,6 +400,35 @@ class FreeCADAdapter(CADAdapter):
                             parsed = None
                     if isinstance(parsed, list):
                         kwargs[list_key] = parsed
+
+        # ==================================================================== #
+        # Dynamic dispatch: determine tool origin before routing.
+        # Local tools ALWAYS take priority. MCP tools are validated against
+        # the cached tool set. Unknown tools fail fast without launching server.
+        # ==================================================================== #
+
+        # Step A: Check if tool_name matches any local tool
+        local_tools = self._get_local_tools()
+        local_names = {tool["function"]["name"] for tool in local_tools}
+        if tool_name in local_names:
+            # Will be handled by existing local routing below
+            pass
+        else:
+            # Step B: Ensure cache is populated, then check MCP tools
+            if self._cached_tools is None:
+                _ = self.get_tools()  # populate cache
+            mcp_names = {
+                tool["function"]["name"]
+                for tool in self._cached_tools
+                if tool["function"]["name"] not in local_names
+            }
+            if tool_name in mcp_names:
+                return self._execute_mcp_tool(tool_name, kwargs)
+
+            # Step C: Unknown tool - fail fast without launching server
+            return json.dumps(
+                {"success": False, "error": f"Unknown tool: {tool_name}"}
+            )
 
         try:
             # Route external tools through the MCP server client instead of the
@@ -424,7 +504,6 @@ class FreeCADAdapter(CADAdapter):
             if tool_name == "get_faces":
                 object_name = kwargs["object_name"]
                 faces = self._proxy.get_faces(str(object_name))
-                import json
                 return json.dumps(faces)
 
             if tool_name == "hole":
@@ -559,7 +638,6 @@ class FreeCADAdapter(CADAdapter):
             if tool_name == "get_edges":
                 object_name = kwargs["object_name"]
                 edges = self._proxy.get_edges(str(object_name))
-                import json
                 return json.dumps(edges)
 
             if tool_name == "fillet":
