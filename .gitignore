@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 .env
+.pytest_cache/
 
 # CAD & Temporary
 *.FCStd1

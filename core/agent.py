@@ -1,10 +1,17 @@
 """PieCAD Core Orchestrator. CAD-agnostic."""
 import json
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from providers.llm.provider import LLMProvider
 from core.adapters.interfaces import CADAdapter
 from core.router import ToolRouter
 from core.verification.checks import check_geometry
+# Context Engine (BIP 4.2): provider-independent state / memory / compilation.
+from core.context import (
+    ContextCompiler,
+    ConversationContext,
+    DesignState,
+    SessionMemory,
+)
 
 # ARCHITECTURE RULE - Object Identity: Property change on an unconsumed object -> set_param in place; Topology change -> new feature object, old one is auto-hidden (Ghost).
 
@@ -126,6 +133,19 @@ class CADAgent:
         self._capture_trace = capture_trace
         self._trace: list = []
 
+        # ---- Context Engine (BIP 4.2) ----
+        # Single authoritative DesignState + per-session SessionMemory + the
+        # central ContextCompiler. History also feeds a ConversationContext that
+        # selects the relevant subset (never a blind dump).
+        self.design_state = DesignState()
+        self.session_memory = SessionMemory()
+        self.conversation = ConversationContext(default_recent_window=4)
+        self.compiler = ContextCompiler()
+
+        # Telemetry for the most recent LLM call(s). Accessible for observability
+        # without dumping large payloads into normal logs.
+        self._context_telemetry: List[Dict[str, Any]] = []
+
     def _is_transient_error(self, error: RuntimeError) -> bool:
         """Return True if the RuntimeError wraps a transient connection/transport failure.
 
@@ -141,60 +161,31 @@ class CADAgent:
         ]
         return any(ind in msg for ind in transient_indicators)
 
-    def _summarize_state(self, state_str: str, max_items: int = 10) -> str:
-        """Summarize CAD state to prevent context exhaustion on large assemblies.
+    # ------------------------------------------------------------------ #
+    # Context Engine integration (BIP 4.2)
+    # ------------------------------------------------------------------ #
+    def _update_design_state(self, state_json: str) -> None:
+        """Refresh DesignState from the adapter's current CAD state string."""
+        self.design_state.update_from_cad_state(state_json)
 
-        Handles both JSON dict (property-based) and JSON list (object-based) states.
-        For lists, keeps only the most recently added max_items objects.
-        Always ensures object names/IDs are clearly visible.
+    def _record_tool_outcome(self, name: str, args: dict, success: bool,
+                             error: Optional[str] = None, out: Any = None) -> None:
+        """Record a tool outcome into DesignState recent_operations/errors."""
+        target = args.get("target_id") or args.get("target") or \
+            args.get("object") or args.get("object_name")
+        self.design_state.update_from_tool_result(
+            tool=name, result=out, target_id=target, args=args,
+            success=success, error=error,
+        )
+
+    def get_context_telemetry(self) -> List[Dict[str, Any]]:
+        """Return recorded per-LLM-call context telemetry (estimate flags set).
+
+        Returns a list of dicts (one per compiled reasoning step). Estimates are
+        labelled `estimated_*`; exact provider token counts, when available, are
+        under `exact_provider_tokens`.
         """
-        # Try to parse state_str as JSON
-        try:
-            parsed_state = json.loads(state_str)
-        except (json.JSONDecodeError, TypeError):
-            # If parsing fails, return as-is
-            return state_str
-
-        # If it's a list (object-based state, e.g., from FreeCAD)
-        if isinstance(parsed_state, list):
-            # If the number of items is <= max_items, return the original JSON string
-            if len(parsed_state) <= max_items:
-                return state_str
-
-            # If > max_items, keep only the most recent max_items objects
-            if len(parsed_state) > max_items:
-                omitted = len(parsed_state) - max_items
-                recent_objects = parsed_state[-max_items:]
-
-                # Return a new JSON dictionary wrapping the state
-                return json.dumps({
-                    "__META__": f"{omitted} older objects omitted to save context.",
-                    "objects": recent_objects
-                })
-
-        # If it's a dict (property-based state)
-        if isinstance(parsed_state, dict):
-            # If the number of keys is <= max_items, return the original JSON string
-            if len(parsed_state) <= max_items:
-                return state_str
-
-            # If > max_items, extract the LAST max_items (most recently added geometry)
-            if len(parsed_state) > max_items:
-                # Get the last max_items keys (most recent objects)
-                recent_keys = list(parsed_state.keys())[-max_items:]
-                omitted_count = len(parsed_state) - max_items
-
-                # Build new dict with meta-key and recent objects only
-                summarized = {
-                    "__META__": f"{omitted_count} older objects omitted to save context."}
-                for key in recent_keys:
-                    if key in parsed_state:
-                        summarized[key] = parsed_state[key]
-
-                return json.dumps(summarized)
-
-        # Fallback: return as-is
-        return state_str
+        return list(self._context_telemetry)
 
     def handle_message(self, user_message: str):
         """Process a user message using a ReAct scratchpad pattern.
@@ -213,6 +204,14 @@ class CADAgent:
 
         # Append user message to long-term history
         self.history.append({"role": "user", "content": user_message.strip()})
+
+        # Track the user turn in the ContextEngine conversation (selective view).
+        self.conversation.add_user(user_message.strip())
+        # Reflect the new task on the DesignState (best-effort, no forced parse).
+        self.design_state.current_task = user_message.strip()
+
+        # Reset per-turn context telemetry (each handle_message is a new turn).
+        self._context_telemetry = []
 
         # Short-term scratchpad for this ReAct loop execution
         scratchpad = []
@@ -245,22 +244,42 @@ class CADAgent:
             except (json.JSONDecodeError, TypeError):
                 state_objects = []
 
-            # 2b. Gate the tool schemas to only those relevant to current state.
-            tools = self.router.filter_tools(all_tools, state_objects)
+            # 2b. Keep the existing ToolRouter gating (unchanged), then let the
+            #     ContextEngine further add plan-required tools.
+            router_tools = self.router.filter_tools(all_tools, state_objects)
+
+            # 2c. Update the authoritative DesignState from the live CAD state.
+            self._update_design_state(state_json)
+
+            # 3. Compile a SELECTIVE context via the ContextEngine (BIP 4.2).
+            #     - relevant CAD objects (no blind state dump)
+            #     - relevant memory (no blind memory dump)
+            #     - relevant conversation history (no blind history dump)
+            #     - plan-required + routed tools (existing ToolRouter preserved)
+            compiled = self.compiler.compile(
+                user_message=user_message,
+                conversation_context=self.conversation,
+                design_state=self.design_state,
+                session_memory=self.session_memory,
+                available_tools=all_tools,
+                react_step=step + 1,
+                system_prefix=SYSTEM_PROMPT + "\n\n" + REACT_LOOP_INJECTION,
+            )
+            tools = compiled.tools or router_tools
             print(
-                f"[Agent] Step {step+1}: {len(tools)}/{len(all_tools)} tools active after routing"
+                f"[Agent] Step {step+1}: {len(tools)}/{len(all_tools)} tools active "
+                f"(routed OR plan-required)"
             )
 
-            # 3. Summarize state to prevent context exhaustion (Context Guard)
-            summarized_state = self._summarize_state(state_json)
+            # Record compiled-context telemetry (estimates only).
+            if compiled.telemetry is not None:
+                self._context_telemetry.append(compiled.telemetry.to_dict())
 
-            # 4. Build dynamic system prompt with current state + ReAct discipline
-            dynamic_system = SYSTEM_PROMPT + \
-                f"\n\nCURRENT CAD STATE:\n{summarized_state}\n\n{REACT_LOOP_INJECTION}"
-
-            # 5. Build messages: [system] + history + scratchpad
+            # 4. Build messages from the compiled context: system (selective
+            #     state) + relevant conversation + scratchpad.
+            dynamic_system = compiled.system_context
             messages = [{"role": "system", "content": dynamic_system}
-                        ] + self.history + scratchpad
+                        ] + compiled.conversation + scratchpad
 
             # 6. Get intent from LLM
             print(f"[Agent] Calling LLM with {len(tools)} tools available...")
@@ -275,6 +294,7 @@ class CADAgent:
                     f"[Agent] Finished reasoning (no tool calls). Final response: {reply}")
                 # Append final response to long-term history
                 self.history.append({"role": "assistant", "content": reply})
+                self.conversation.add_assistant(reply)
                 if self._capture_trace:
                     self._trace.append({
                         "step": step + 1,
@@ -353,6 +373,14 @@ class CADAgent:
                         "error": str(error) if error and not success else None,
                         "attempt": attempt + 1 if 'attempt' in locals() else 1,
                     })
+
+                # Record the tool outcome into the authoritative DesignState
+                # (recent operations / recent errors / target listing).
+                self._record_tool_outcome(
+                    name, args, success,
+                    error=(str(error) if error and not success else None),
+                    out=out,
+                )
 
             # 10. Append tool results to scratchpad as tool messages
             for i, tc in enumerate(response.tool_calls):

@@ -1,0 +1,985 @@
+2026-09-20 13:25:36,513 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 13:25:36,515 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 13:25:36,515 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 13:25:36,515 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 13:25:36,515 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=localhost
+2026-09-20 13:25:36,515 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9875
+2026-09-20 13:25:36,515 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 13:25:36,516 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 13:25:36,516 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 13:25:36,517 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 13:25:36,521 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 13:25:36,522 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 13:25:36,522 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9875
+2026-09-20 13:25:36,522 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 13:25:36,522 INFO freecad_mcp.server: Instance ID: c45ee3d9-0abe-4bb3-b071-255414142554
+2026-09-20 13:25:36,522 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 13:25:36,522 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 13:25:36,522 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 13:25:36,522 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 13:25:36,523 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 13:25:36,541 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 13:25:36,847 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9875
+2026-09-20 13:25:41,285 CRITICAL freecad_mcp.server: FAILED to connect FreeCAD bridge (XmlRpcBridge): Failed to connect to XML-RPC server at http://localhost:9875: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+Traceback (most recent call last):
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 179, in ping
+    await asyncio.wait_for(
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\tasks.py", line 489, in wait_for
+    return fut.result()
+           ^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\concurrent\futures\thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 182, in <lambda>
+    lambda: proxy.execute("_result_ = True"),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1178, in single_request
+    http_conn = self.send_request(host, handler, request_body, verbose)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1291, in send_request
+    self.send_content(connection, request_body)
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1321, in send_content
+    connection.endheaders(request_body)
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1346, in endheaders
+    self._send_output(message_body, encode_chunked=encode_chunked)
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1106, in _send_output
+    self.send(msg)
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1044, in send
+    self.connect()
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1010, in connect
+    self.sock = self._create_connection(
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\socket.py", line 863, in create_connection
+    raise exceptions[0]
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\socket.py", line 848, in create_connection
+    sock.connect(sa)
+ConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 96, in connect
+    await self.ping()
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 191, in ping
+    raise ConnectionError(msg) from e
+ConnectionError: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\server.py", line 204, in lifespan
+    await _bridge.connect()
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 109, in connect
+    raise ConnectionError(msg) from e
+ConnectionError: Failed to connect to XML-RPC server at http://localhost:9875: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+
+2026-09-20 13:25:41,422 CRITICAL root: FATAL MCP STARTUP CRASH
+  + Exception Group Traceback (most recent call last):
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\server.py", line 559, in main
+  |     _run_main()
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\server.py", line 548, in _run_main
+  |     mcp.run()
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\fastmcp\server.py", line 296, in run
+  |     anyio.run(self.run_stdio_async)
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\anyio\_core\_eventloop.py", line 77, in run
+  |     return async_backend.run(func, args, {}, backend_options)
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 2342, in run
+  |     return runner.run(wrapper())
+  |            ^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\runners.py", line 118, in run
+  |     return self._loop.run_until_complete(task)
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\base_events.py", line 654, in run_until_complete
+  |     return future.result()
+  |            ^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 2325, in wrapper
+  |     return await func(*args)
+  |            ^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\fastmcp\server.py", line 749, in run_stdio_async
+  |     async with stdio_server() as (read_stream, write_stream):
+  |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\contextlib.py", line 231, in __aexit__
+  |     await self.gen.athrow(typ, value, traceback)
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\stdio.py", line 85, in stdio_server
+  |     async with anyio.create_task_group() as tg:
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 783, in __aexit__
+  |     raise BaseExceptionGroup(
+  | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 179, in ping
+    |     await asyncio.wait_for(
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\tasks.py", line 489, in wait_for
+    |     return fut.result()
+    |            ^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\concurrent\futures\thread.py", line 58, in run
+    |     result = self.fn(*self.args, **self.kwargs)
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 182, in <lambda>
+    |     lambda: proxy.execute("_result_ = True"),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1122, in __call__
+    |     return self.__send(self.__name, args)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1464, in __request
+    |     response = self.__transport.request(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1166, in request
+    |     return self.single_request(host, handler, request_body, verbose)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1178, in single_request
+    |     http_conn = self.send_request(host, handler, request_body, verbose)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1291, in send_request
+    |     self.send_content(connection, request_body)
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1321, in send_content
+    |     connection.endheaders(request_body)
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1346, in endheaders
+    |     self._send_output(message_body, encode_chunked=encode_chunked)
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1106, in _send_output
+    |     self.send(msg)
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1044, in send
+    |     self.connect()
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1010, in connect
+    |     self.sock = self._create_connection(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\socket.py", line 863, in create_connection
+    |     raise exceptions[0]
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\socket.py", line 848, in create_connection
+    |     sock.connect(sa)
+    | ConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it
+    | 
+    | The above exception was the direct cause of the following exception:
+    | 
+    | Traceback (most recent call last):
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 96, in connect
+    |     await self.ping()
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 191, in ping
+    |     raise ConnectionError(msg) from e
+    | ConnectionError: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+    | 
+    | The above exception was the direct cause of the following exception:
+    | 
+    | Traceback (most recent call last):
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\stdio.py", line 88, in stdio_server
+    |     yield read_stream, write_stream
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\fastmcp\server.py", line 750, in run_stdio_async
+    |     await self._mcp_server.run(
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\lowlevel\server.py", line 650, in run
+    |     lifespan_context = await stack.enter_async_context(self.lifespan(self))
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\contextlib.py", line 650, in enter_async_context
+    |     result = await _enter(cm)
+    |              ^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\contextlib.py", line 210, in __aenter__
+    |     return await anext(self.gen)
+    |            ^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\fastmcp\server.py", line 140, in wrap
+    |     async with lifespan(app) as context:
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\contextlib.py", line 210, in __aenter__
+    |     return await anext(self.gen)
+    |            ^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\server.py", line 204, in lifespan
+    |     await _bridge.connect()
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 109, in connect
+    |     raise ConnectionError(msg) from e
+    | ConnectionError: Failed to connect to XML-RPC server at http://localhost:9875: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+    +------------------------------------
+
+2026-09-20 13:26:51,301 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 13:26:51,301 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 13:26:51,302 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 13:26:51,302 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 13:26:51,302 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=localhost
+2026-09-20 13:26:51,302 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9875
+2026-09-20 13:26:51,302 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 13:26:51,302 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 13:26:51,302 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 13:26:51,304 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 13:26:51,307 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 13:26:51,314 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 13:26:51,314 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9875
+2026-09-20 13:26:51,314 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 13:26:51,314 INFO freecad_mcp.server: Instance ID: f585cd91-cf5f-4bab-a841-0e5825ae13b7
+2026-09-20 13:26:51,315 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 13:26:51,315 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 13:26:51,315 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 13:26:51,315 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 13:26:51,315 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 13:26:51,341 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 13:26:51,392 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9875
+2026-09-20 13:26:55,495 CRITICAL freecad_mcp.server: FAILED to connect FreeCAD bridge (XmlRpcBridge): Failed to connect to XML-RPC server at http://localhost:9875: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+Traceback (most recent call last):
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 179, in ping
+    await asyncio.wait_for(
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\tasks.py", line 489, in wait_for
+    return fut.result()
+           ^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\concurrent\futures\thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 182, in <lambda>
+    lambda: proxy.execute("_result_ = True"),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1178, in single_request
+    http_conn = self.send_request(host, handler, request_body, verbose)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1291, in send_request
+    self.send_content(connection, request_body)
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1321, in send_content
+    connection.endheaders(request_body)
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1346, in endheaders
+    self._send_output(message_body, encode_chunked=encode_chunked)
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1106, in _send_output
+    self.send(msg)
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1044, in send
+    self.connect()
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1010, in connect
+    self.sock = self._create_connection(
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\socket.py", line 863, in create_connection
+    raise exceptions[0]
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\socket.py", line 848, in create_connection
+    sock.connect(sa)
+ConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 96, in connect
+    await self.ping()
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 191, in ping
+    raise ConnectionError(msg) from e
+ConnectionError: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\server.py", line 204, in lifespan
+    await _bridge.connect()
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 109, in connect
+    raise ConnectionError(msg) from e
+ConnectionError: Failed to connect to XML-RPC server at http://localhost:9875: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+
+2026-09-20 13:26:55,513 CRITICAL root: FATAL MCP STARTUP CRASH
+  + Exception Group Traceback (most recent call last):
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\server.py", line 559, in main
+  |     _run_main()
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\server.py", line 548, in _run_main
+  |     mcp.run()
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\fastmcp\server.py", line 296, in run
+  |     anyio.run(self.run_stdio_async)
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\anyio\_core\_eventloop.py", line 77, in run
+  |     return async_backend.run(func, args, {}, backend_options)
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 2342, in run
+  |     return runner.run(wrapper())
+  |            ^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\runners.py", line 118, in run
+  |     return self._loop.run_until_complete(task)
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\base_events.py", line 654, in run_until_complete
+  |     return future.result()
+  |            ^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 2325, in wrapper
+  |     return await func(*args)
+  |            ^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\fastmcp\server.py", line 749, in run_stdio_async
+  |     async with stdio_server() as (read_stream, write_stream):
+  |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\contextlib.py", line 231, in __aexit__
+  |     await self.gen.athrow(typ, value, traceback)
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\stdio.py", line 85, in stdio_server
+  |     async with anyio.create_task_group() as tg:
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 783, in __aexit__
+  |     raise BaseExceptionGroup(
+  | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 179, in ping
+    |     await asyncio.wait_for(
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\tasks.py", line 489, in wait_for
+    |     return fut.result()
+    |            ^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\concurrent\futures\thread.py", line 58, in run
+    |     result = self.fn(*self.args, **self.kwargs)
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 182, in <lambda>
+    |     lambda: proxy.execute("_result_ = True"),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1122, in __call__
+    |     return self.__send(self.__name, args)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1464, in __request
+    |     response = self.__transport.request(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1166, in request
+    |     return self.single_request(host, handler, request_body, verbose)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1178, in single_request
+    |     http_conn = self.send_request(host, handler, request_body, verbose)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1291, in send_request
+    |     self.send_content(connection, request_body)
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1321, in send_content
+    |     connection.endheaders(request_body)
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1346, in endheaders
+    |     self._send_output(message_body, encode_chunked=encode_chunked)
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1106, in _send_output
+    |     self.send(msg)
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1044, in send
+    |     self.connect()
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1010, in connect
+    |     self.sock = self._create_connection(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\socket.py", line 863, in create_connection
+    |     raise exceptions[0]
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\socket.py", line 848, in create_connection
+    |     sock.connect(sa)
+    | ConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it
+    | 
+    | The above exception was the direct cause of the following exception:
+    | 
+    | Traceback (most recent call last):
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 96, in connect
+    |     await self.ping()
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 191, in ping
+    |     raise ConnectionError(msg) from e
+    | ConnectionError: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+    | 
+    | The above exception was the direct cause of the following exception:
+    | 
+    | Traceback (most recent call last):
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\stdio.py", line 88, in stdio_server
+    |     yield read_stream, write_stream
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\fastmcp\server.py", line 750, in run_stdio_async
+    |     await self._mcp_server.run(
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\lowlevel\server.py", line 650, in run
+    |     lifespan_context = await stack.enter_async_context(self.lifespan(self))
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\contextlib.py", line 650, in enter_async_context
+    |     result = await _enter(cm)
+    |              ^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\contextlib.py", line 210, in __aenter__
+    |     return await anext(self.gen)
+    |            ^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\fastmcp\server.py", line 140, in wrap
+    |     async with lifespan(app) as context:
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\contextlib.py", line 210, in __aenter__
+    |     return await anext(self.gen)
+    |            ^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\server.py", line 204, in lifespan
+    |     await _bridge.connect()
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 109, in connect
+    |     raise ConnectionError(msg) from e
+    | ConnectionError: Failed to connect to XML-RPC server at http://localhost:9875: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+    +------------------------------------
+
+2026-09-20 13:33:04,839 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 13:33:04,839 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 13:33:04,839 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 13:33:04,840 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 13:33:04,840 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 13:33:04,840 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 13:33:04,841 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 13:33:04,841 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 13:33:04,841 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 13:33:04,841 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 13:33:04,845 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 13:33:04,845 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 13:33:04,847 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 13:33:04,847 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 13:33:04,847 INFO freecad_mcp.server: Instance ID: f379005b-13b1-401a-bf8b-e8be2eca1db2
+2026-09-20 13:33:04,847 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 13:33:04,847 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 13:33:04,847 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 13:33:04,847 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 13:33:04,847 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 13:33:04,872 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 13:33:04,935 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 13:33:11,736 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 13:33:13,779 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 13:33:13,793 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 13:33:13,833 INFO freecad_mcp.server: Disconnecting FreeCAD bridge...
+2026-09-20 14:35:02,104 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 14:35:02,105 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 14:35:02,105 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 14:35:02,105 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 14:35:02,106 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 14:35:02,106 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 14:35:02,106 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 14:35:02,106 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 14:35:02,106 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 14:35:02,106 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 14:35:02,111 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 14:35:02,111 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 14:35:02,112 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 14:35:02,112 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 14:35:02,112 INFO freecad_mcp.server: Instance ID: 1ade3639-84d0-4771-bc89-f41a2f9ebeca
+2026-09-20 14:35:02,112 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 14:35:02,112 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 14:35:02,113 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 14:35:02,113 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 14:35:02,113 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 14:35:02,137 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 14:35:02,180 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 14:35:04,377 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 14:35:06,449 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 14:35:06,458 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 14:35:06,501 INFO freecad_mcp.server: Disconnecting FreeCAD bridge...
+2026-09-20 15:16:48,550 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 15:16:48,551 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 15:16:48,551 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 15:16:48,551 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 15:16:48,551 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 15:16:48,551 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 15:16:48,551 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 15:16:48,551 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 15:16:48,551 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 15:16:48,552 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 15:16:48,554 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 15:16:48,554 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 15:16:48,554 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 15:16:48,554 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 15:16:48,554 INFO freecad_mcp.server: Instance ID: d3544711-a37e-4ebd-8c17-72de98f2170a
+2026-09-20 15:16:48,554 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 15:16:48,554 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 15:16:48,554 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 15:16:48,554 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 15:16:48,554 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 15:16:48,570 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 15:16:48,602 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 15:16:50,739 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 15:16:52,772 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 15:16:52,777 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 15:16:52,793 INFO freecad_mcp.server: Disconnecting FreeCAD bridge...
+2026-09-20 15:17:06,782 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 15:17:06,783 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 15:17:06,783 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 15:17:06,783 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 15:17:06,783 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 15:17:06,783 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 15:17:06,783 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 15:17:06,783 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 15:17:06,783 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 15:17:06,783 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 15:17:06,785 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 15:17:06,785 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 15:17:06,785 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 15:17:06,785 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 15:17:06,786 INFO freecad_mcp.server: Instance ID: 66c167de-1567-4186-8e91-79f3e4ecb12f
+2026-09-20 15:17:06,786 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 15:17:06,786 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 15:17:06,786 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 15:17:06,786 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 15:17:06,793 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 15:17:06,806 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 15:17:06,833 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 15:17:08,894 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 15:17:10,918 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 15:17:10,923 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 15:17:10,942 INFO freecad_mcp.server: Disconnecting FreeCAD bridge...
+2026-09-20 15:43:24,486 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 15:43:24,487 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 15:43:24,487 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 15:43:24,487 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 15:43:24,487 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 15:43:24,488 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 15:43:24,489 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 15:43:24,489 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 15:43:24,489 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 15:43:24,490 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 15:43:24,495 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 15:43:24,495 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 15:43:24,495 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 15:43:24,495 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 15:43:24,495 INFO freecad_mcp.server: Instance ID: 1fd2ce09-470d-462a-abd8-b83f3a1c2122
+2026-09-20 15:43:24,496 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 15:43:24,496 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 15:43:24,496 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 15:43:24,496 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 15:43:24,496 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 15:43:24,519 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 15:43:24,563 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 15:43:26,729 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 15:43:28,771 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 15:43:28,786 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 15:43:28,827 INFO freecad_mcp.server: Disconnecting FreeCAD bridge...
+2026-09-20 15:44:56,507 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 15:44:56,507 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 15:44:56,507 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 15:44:56,508 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 15:44:56,508 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 15:44:56,508 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 15:44:56,508 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 15:44:56,508 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 15:44:56,508 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 15:44:56,509 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 15:44:56,511 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 15:44:56,512 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 15:44:56,512 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 15:44:56,512 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 15:44:56,512 INFO freecad_mcp.server: Instance ID: a8d42140-6c72-4811-96b3-017977c79f60
+2026-09-20 15:44:56,512 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 15:44:56,512 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 15:44:56,512 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 15:44:56,512 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 15:44:56,512 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 15:44:56,530 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 15:44:56,565 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 15:44:58,638 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 15:45:00,698 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 15:45:00,709 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 15:45:00,750 INFO freecad_mcp.server: Disconnecting FreeCAD bridge...
+2026-09-20 15:45:03,562 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 15:45:03,562 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 15:45:03,562 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 15:45:03,563 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 15:45:03,563 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 15:45:03,564 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 15:45:03,564 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 15:45:03,565 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 15:45:03,565 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 15:45:03,565 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 15:45:03,568 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 15:45:03,569 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 15:45:03,569 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 15:45:03,569 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 15:45:03,569 INFO freecad_mcp.server: Instance ID: 5a2aa85f-3595-4c47-96c3-aca7aaa75544
+2026-09-20 15:45:03,570 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 15:45:03,570 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 15:45:03,570 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 15:45:03,570 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 15:45:03,570 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 15:45:03,593 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 15:45:03,626 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 15:45:05,687 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 15:45:07,707 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 15:45:07,716 INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-09-20 15:45:09,791 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 15:45:09,829 INFO freecad_mcp.server: Disconnecting FreeCAD bridge...
+2026-09-20 15:48:16,066 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 15:48:16,067 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 15:48:16,067 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 15:48:16,067 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 15:48:16,067 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 15:48:16,067 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 15:48:16,068 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 15:48:16,068 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 15:48:16,068 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 15:48:16,068 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 15:48:16,071 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 15:48:16,072 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 15:48:16,072 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 15:48:16,072 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 15:48:16,072 INFO freecad_mcp.server: Instance ID: 8ace6009-03ce-4b2d-9e73-35cabc9c4bbd
+2026-09-20 15:48:16,072 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 15:48:16,072 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 15:48:16,072 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 15:48:16,072 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 15:48:16,072 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 15:48:16,101 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 15:48:16,143 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 15:48:18,227 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 15:48:20,274 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 15:48:20,283 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 15:48:20,320 INFO freecad_mcp.server: Disconnecting FreeCAD bridge...
+2026-09-20 15:48:23,128 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 15:48:23,128 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 15:48:23,128 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 15:48:23,128 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 15:48:23,128 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 15:48:23,128 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 15:48:23,129 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 15:48:23,129 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 15:48:23,129 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 15:48:23,129 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 15:48:23,132 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 15:48:23,132 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 15:48:23,132 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 15:48:23,132 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 15:48:23,133 INFO freecad_mcp.server: Instance ID: ea7383cf-5472-45bf-adb8-bff66ac2526c
+2026-09-20 15:48:23,133 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 15:48:23,133 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 15:48:23,133 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 15:48:23,133 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 15:48:23,133 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 15:48:23,149 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 15:48:23,180 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 15:48:25,207 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 15:48:27,243 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 15:48:27,251 INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-09-20 15:48:29,329 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 15:48:29,368 INFO freecad_mcp.server: Disconnecting FreeCAD bridge...
+2026-09-20 15:49:52,273 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 15:49:52,273 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 15:49:52,273 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 15:49:52,273 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 15:49:52,274 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 15:49:52,274 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 15:49:52,274 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 15:49:52,274 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 15:49:52,274 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 15:49:52,275 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 15:49:52,281 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 15:49:52,282 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 15:49:52,282 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 15:49:52,283 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 15:49:52,283 INFO freecad_mcp.server: Instance ID: 2331260d-e15f-4901-8d67-d10f45024e47
+2026-09-20 15:49:52,283 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 15:49:52,283 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 15:49:52,284 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 15:49:52,284 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 15:49:52,284 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 15:49:52,307 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 15:49:52,341 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 15:49:54,405 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 15:49:56,454 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 15:49:56,464 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 15:49:56,508 INFO freecad_mcp.server: Disconnecting FreeCAD bridge...
+2026-09-20 15:49:59,542 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 15:49:59,544 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 15:49:59,545 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 15:49:59,545 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 15:49:59,546 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 15:49:59,546 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 15:49:59,546 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 15:49:59,546 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 15:49:59,546 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 15:49:59,547 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 15:49:59,551 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 15:49:59,551 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 15:49:59,551 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 15:49:59,551 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 15:49:59,551 INFO freecad_mcp.server: Instance ID: a8e2d9e2-ecfd-4367-8849-fce542debb8b
+2026-09-20 15:49:59,552 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 15:49:59,552 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 15:49:59,552 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 15:49:59,552 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 15:49:59,552 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 15:49:59,569 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 15:49:59,601 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 15:50:01,671 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 15:50:03,717 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 15:50:03,725 INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-09-20 15:50:05,786 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 15:50:05,822 INFO freecad_mcp.server: Disconnecting FreeCAD bridge...
+2026-09-20 22:11:28,323 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 22:11:28,324 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 22:11:28,324 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 22:11:28,324 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 22:11:28,324 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 22:11:28,324 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 22:11:28,324 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 22:11:28,324 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 22:11:28,324 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 22:11:28,325 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 22:11:28,326 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 22:11:28,326 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 22:11:28,327 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 22:11:28,327 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 22:11:28,327 INFO freecad_mcp.server: Instance ID: cef86d4b-e7ab-4b4e-83ba-cc67e39b9b99
+2026-09-20 22:11:28,327 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 22:11:28,327 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 22:11:28,327 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 22:11:28,327 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 22:11:28,327 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 22:11:28,344 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 22:11:28,413 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 22:11:33,489 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 22:11:35,553 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 22:11:35,560 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 22:11:35,637 INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-09-20 22:11:35,639 WARNING mcp.server.lowlevel.server: Tool 'nonexistent_tool' not listed, no validation will be performed
+2026-09-20 22:29:48,304 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 22:29:48,304 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 22:29:48,304 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 22:29:48,305 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 22:29:48,305 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 22:29:48,305 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 22:29:48,305 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 22:29:48,305 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 22:29:48,306 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 22:29:48,306 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 22:29:48,310 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 22:29:48,310 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 22:29:48,311 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 22:29:48,311 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 22:29:48,311 INFO freecad_mcp.server: Instance ID: de0ec195-086a-4b5c-abd4-c9ad956d0695
+2026-09-20 22:29:48,311 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 22:29:48,311 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 22:29:48,311 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 22:29:48,311 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 22:29:48,311 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 22:29:48,336 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 22:29:48,381 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 22:29:50,454 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 22:29:52,479 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 22:29:52,500 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 22:29:52,657 INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-09-20 22:29:52,660 WARNING mcp.server.lowlevel.server: Tool 'nonexistent_tool' not listed, no validation will be performed
+2026-09-20 23:27:30,255 DEBUG freecad_mcp.server: MCP server process started
+2026-09-20 23:27:30,256 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-20 23:27:30,256 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-20 23:27:30,257 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-20 23:27:30,257 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-20 23:27:30,257 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-20 23:27:30,257 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-20 23:27:30,257 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-20 23:27:30,258 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-20 23:27:30,258 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-20 23:27:30,262 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-20 23:27:30,263 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-20 23:27:30,263 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-20 23:27:30,264 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-20 23:27:30,264 INFO freecad_mcp.server: Instance ID: 09e6ce15-55f0-4686-b480-99da539ebcb8
+2026-09-20 23:27:30,265 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-20 23:27:30,265 INFO freecad_mcp.server: Transport: stdio
+2026-09-20 23:27:30,265 INFO freecad_mcp.server: Starting stdio transport
+2026-09-20 23:27:30,265 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-20 23:27:30,266 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-20 23:27:30,291 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-20 23:27:30,341 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-20 23:27:32,507 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-20 23:27:34,592 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-20 23:27:34,604 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-09-20 23:27:34,672 INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-09-21 00:56:49,463 DEBUG freecad_mcp.server: MCP server process started
+2026-09-21 00:56:49,464 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-21 00:56:49,464 DEBUG freecad_mcp.server: Current working directory: c:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-21 00:56:49,465 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-21 00:56:49,465 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-21 00:56:49,465 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-21 00:56:49,465 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-21 00:56:49,465 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-21 00:56:49,465 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-21 00:56:49,466 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-21 00:56:49,470 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-21 00:56:49,470 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-21 00:56:49,471 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-21 00:56:49,471 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-21 00:56:49,471 INFO freecad_mcp.server: Instance ID: 4c863ea2-c077-4d02-a0ef-085df2e0e11f
+2026-09-21 00:56:49,471 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-21 00:56:49,471 INFO freecad_mcp.server: Transport: stdio
+2026-09-21 00:56:49,471 INFO freecad_mcp.server: Starting stdio transport
+2026-09-21 00:56:49,471 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-21 00:56:49,471 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-21 00:56:49,497 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-21 00:56:49,559 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-21 00:56:53,806 CRITICAL freecad_mcp.server: FAILED to connect FreeCAD bridge (XmlRpcBridge): Failed to connect to XML-RPC server at http://localhost:9876: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+Traceback (most recent call last):
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 179, in ping
+    await asyncio.wait_for(
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\tasks.py", line 489, in wait_for
+    return fut.result()
+           ^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\concurrent\futures\thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 182, in <lambda>
+    lambda: proxy.execute("_result_ = True"),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1178, in single_request
+    http_conn = self.send_request(host, handler, request_body, verbose)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1291, in send_request
+    self.send_content(connection, request_body)
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1321, in send_content
+    connection.endheaders(request_body)
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1346, in endheaders
+    self._send_output(message_body, encode_chunked=encode_chunked)
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1106, in _send_output
+    self.send(msg)
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1044, in send
+    self.connect()
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1010, in connect
+    self.sock = self._create_connection(
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\socket.py", line 863, in create_connection
+    raise exceptions[0]
+  File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\socket.py", line 848, in create_connection
+    sock.connect(sa)
+ConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 96, in connect
+    await self.ping()
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 191, in ping
+    raise ConnectionError(msg) from e
+ConnectionError: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\server.py", line 204, in lifespan
+    await _bridge.connect()
+  File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 109, in connect
+    raise ConnectionError(msg) from e
+ConnectionError: Failed to connect to XML-RPC server at http://localhost:9876: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+
+2026-09-21 00:56:53,976 CRITICAL root: FATAL MCP STARTUP CRASH
+  + Exception Group Traceback (most recent call last):
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\server.py", line 559, in main
+  |     _run_main()
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\server.py", line 548, in _run_main
+  |     mcp.run()
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\fastmcp\server.py", line 296, in run
+  |     anyio.run(self.run_stdio_async)
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\anyio\_core\_eventloop.py", line 77, in run
+  |     return async_backend.run(func, args, {}, backend_options)
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 2342, in run
+  |     return runner.run(wrapper())
+  |            ^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\runners.py", line 118, in run
+  |     return self._loop.run_until_complete(task)
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\base_events.py", line 654, in run_until_complete
+  |     return future.result()
+  |            ^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 2325, in wrapper
+  |     return await func(*args)
+  |            ^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\fastmcp\server.py", line 749, in run_stdio_async
+  |     async with stdio_server() as (read_stream, write_stream):
+  |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\contextlib.py", line 231, in __aexit__
+  |     await self.gen.athrow(typ, value, traceback)
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\stdio.py", line 85, in stdio_server
+  |     async with anyio.create_task_group() as tg:
+  |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 783, in __aexit__
+  |     raise BaseExceptionGroup(
+  | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 179, in ping
+    |     await asyncio.wait_for(
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\tasks.py", line 489, in wait_for
+    |     return fut.result()
+    |            ^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\concurrent\futures\thread.py", line 58, in run
+    |     result = self.fn(*self.args, **self.kwargs)
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 182, in <lambda>
+    |     lambda: proxy.execute("_result_ = True"),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1122, in __call__
+    |     return self.__send(self.__name, args)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1464, in __request
+    |     response = self.__transport.request(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1166, in request
+    |     return self.single_request(host, handler, request_body, verbose)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1178, in single_request
+    |     http_conn = self.send_request(host, handler, request_body, verbose)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1291, in send_request
+    |     self.send_content(connection, request_body)
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\xmlrpc\client.py", line 1321, in send_content
+    |     connection.endheaders(request_body)
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1346, in endheaders
+    |     self._send_output(message_body, encode_chunked=encode_chunked)
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1106, in _send_output
+    |     self.send(msg)
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1044, in send
+    |     self.connect()
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\http\client.py", line 1010, in connect
+    |     self.sock = self._create_connection(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\socket.py", line 863, in create_connection
+    |     raise exceptions[0]
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\socket.py", line 848, in create_connection
+    |     sock.connect(sa)
+    | ConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it
+    | 
+    | The above exception was the direct cause of the following exception:
+    | 
+    | Traceback (most recent call last):
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 96, in connect
+    |     await self.ping()
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 191, in ping
+    |     raise ConnectionError(msg) from e
+    | ConnectionError: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+    | 
+    | The above exception was the direct cause of the following exception:
+    | 
+    | Traceback (most recent call last):
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\stdio.py", line 88, in stdio_server
+    |     yield read_stream, write_stream
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\fastmcp\server.py", line 750, in run_stdio_async
+    |     await self._mcp_server.run(
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\lowlevel\server.py", line 650, in run
+    |     lifespan_context = await stack.enter_async_context(self.lifespan(self))
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\contextlib.py", line 650, in enter_async_context
+    |     result = await _enter(cm)
+    |              ^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\contextlib.py", line 210, in __aenter__
+    |     return await anext(self.gen)
+    |            ^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Lib\site-packages\mcp\server\fastmcp\server.py", line 140, in wrap
+    |     async with lifespan(app) as context:
+    |   File "C:\Users\Yashwanth\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\contextlib.py", line 210, in __aenter__
+    |     return await anext(self.gen)
+    |            ^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\server.py", line 204, in lifespan
+    |     await _bridge.connect()
+    |   File "C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\src\freecad_mcp\bridge\xmlrpc.py", line 109, in connect
+    |     raise ConnectionError(msg) from e
+    | ConnectionError: Failed to connect to XML-RPC server at http://localhost:9876: Ping failed: [WinError 10061] No connection could be made because the target machine actively refused it
+    +------------------------------------
+
+2026-09-21 01:07:43,743 DEBUG freecad_mcp.server: MCP server process started
+2026-09-21 01:07:43,743 DEBUG freecad_mcp.server: Python executable: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\adapters\freecad\mcp_server\.venv\Scripts\python.exe
+2026-09-21 01:07:43,744 DEBUG freecad_mcp.server: Current working directory: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD
+2026-09-21 01:07:43,744 DEBUG freecad_mcp.server: FREECAD_MODE=xmlrpc
+2026-09-21 01:07:43,744 DEBUG freecad_mcp.server: FREECAD_SOCKET_HOST=None
+2026-09-21 01:07:43,745 DEBUG freecad_mcp.server: FREECAD_XMLRPC_PORT=9876
+2026-09-21 01:07:43,745 DEBUG freecad_mcp.server: FREECAD_TRANSPORT=None
+2026-09-21 01:07:43,745 DEBUG freecad_mcp.server: FREECAD_HTTP_PORT=None
+2026-09-21 01:07:43,746 DEBUG freecad_mcp.server: Debug log file: C:\Users\Yashwanth\OneDrive\Desktop\pieCAD\exports\mcp_fatal.log
+2026-09-21 01:07:43,746 DEBUG freecad_mcp.server: Configuration loading started
+2026-09-21 01:07:43,750 DEBUG freecad_mcp.server: Configuration successfully loaded
+2026-09-21 01:07:43,750 DEBUG freecad_mcp.server: Selected FreeCAD mode: xmlrpc
+2026-09-21 01:07:43,750 DEBUG freecad_mcp.server: Selected XML-RPC host/port: localhost:9876
+2026-09-21 01:07:43,750 INFO freecad_mcp.server: Starting FreeCAD Robust MCP Server
+2026-09-21 01:07:43,751 INFO freecad_mcp.server: Instance ID: 4ca979ed-3d1e-43fa-a772-52d3eae7ece5
+2026-09-21 01:07:43,751 INFO freecad_mcp.server: Mode: xmlrpc
+2026-09-21 01:07:43,751 INFO freecad_mcp.server: Transport: stdio
+2026-09-21 01:07:43,751 INFO freecad_mcp.server: Starting stdio transport
+2026-09-21 01:07:43,753 INFO freecad_mcp.server: Waiting for MCP client connection (FreeCAD connection tested on first request)...
+2026-09-21 01:07:43,753 INFO freecad_mcp.server: Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly
+2026-09-21 01:07:43,780 INFO freecad_mcp.server: Initializing FreeCAD bridge...
+2026-09-21 01:07:43,823 INFO freecad_mcp.server: Using XML-RPC bridge: localhost:9876
+2026-09-21 01:07:48,281 INFO freecad_mcp.server: FreeCAD bridge connected
+2026-09-21 01:07:50,328 INFO freecad_mcp.server: FreeCAD unknown (GUI: headless)
+2026-09-21 01:07:50,352 INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest

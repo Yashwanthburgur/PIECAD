@@ -1,0 +1,144 @@
+=== REAL AGENTIC FREEOCAD EXECUTION PROOF ===
+
+[BACKEND] reachable. initial state: []
+======================================================================
+TEST 1: prompt = 'Create a 100 x 50 x 20 mm box.'
+======================================================================
+[SETUP] document cleared
+
+[RESULT] agent completed: True
+[RESULT] final_response: 'The current visible object is a rectangular box with dimensions 100 mm length, 50 mm width, and 20 mm height.'
+[RESULT] session_tools: ['box']
+
+[TRACE] ordered tool sequence: ['box']
+
+[TRACE] per-tool detail:
+  step=1 tool=box args={'width': 50, 'id': 'box1', 'length': 100, 'height': 20} success=True error=None
+  step=2 type=completion reply='The current visible object is a rectangular box with dimensions 100 mm length, 50 mm width, and 20 mm height.'
+
+[ANALYSIS] tool execution errors: []
+[ANALYSIS] failed-then-? entries (potential retries): 0
+
+[STATE] final FreeCAD objects:
+[
+  {
+    "id": "box1",
+    "type": "Part::Box",
+    "props": {
+      "Length": 100.0,
+      "Width": 50.0,
+      "Height": 20.0
+    }
+  }
+]
+======================================================================
+TEST 2: prompt = 'Create a cylinder of radius 10 mm and height 40 mm.'
+======================================================================
+[SETUP] document cleared
+
+[RESULT] agent completed: True
+[RESULT] final_response: 'The current visible object is a cylinder named cylinder1 with radius 10 mm and height 40 mm.'
+[RESULT] session_tools: ['cylinder']
+
+[TRACE] ordered tool sequence: ['cylinder']
+
+[TRACE] per-tool detail:
+  step=1 tool=cylinder args={'origin': '{"x": 0, "y": 0, "z": 0}', 'id': 'cylinder1', 'radius': 10, 'height': 40} success=True error=None
+  step=2 type=completion reply='The current visible object is a cylinder named cylinder1 with radius 10 mm and height 40 mm.'
+
+[ANALYSIS] tool execution errors: []
+[ANALYSIS] failed-then-? entries (potential retries): 0
+
+[STATE] final FreeCAD objects:
+[
+  {
+    "id": "cylinder1",
+    "type": "Part::Cylinder",
+    "props": {
+      "Height": 40.0,
+      "Radius": 10.0
+    }
+  }
+]
+======================================================================
+TEST 3: prompt = 'Create a 100 x 50 x 20 mm box and subtract a 20 mm diameter hole through its center.'
+======================================================================
+[SETUP] document cleared
+
+[RESULT] agent completed: True
+[RESULT] final_response: "The current visible object is 'hole1', which is a 100×50×20 mm box with a 20 mm diameter hole drilled through its center normal to the top face."
+[RESULT] session_tools: ['box', 'hole', 'get_bom']
+
+[TRACE] ordered tool sequence: ['box', 'hole', 'get_bom']
+
+[TRACE] per-tool detail:
+  step=1 tool=box args={'height': 20, 'width': 50, 'id': 'box1', 'length': 100} success=True error=None
+  step=2 tool=hole args={'target_id': 'box1', 'origin': {'x': 50, 'y': 25, 'z': 20}, 'direction': {'x': 0, 'y': 0, 'z': -1}, 'depth': 20, 'kind': 'simple', 'id': 'hole1', 'diameter': 20} success=True error=None
+  step=3 tool=get_bom args={'id': 'bom1'} success=True error=None
+  step=4 type=completion reply="The current visible object is 'hole1', which is a 100×50×20 mm box with a 20 mm diameter hole drilled through its center normal to the top face."
+
+[ANALYSIS] tool execution errors: []
+[ANALYSIS] failed-then-? entries (potential retries): 0
+
+[STATE] final FreeCAD objects:
+[
+  {
+    "id": "box1",
+    "type": "Part::Box",
+    "props": {
+      "Length": 100.0,
+      "Width": 50.0,
+      "Height": 20.0
+    }
+  },
+  {
+    "id": "hole1_drill",
+    "type": "Part::Cylinder",
+    "props": {
+      "Height": 22.0,
+      "Radius": 10.0
+    }
+  },
+  {
+    "id": "hole1",
+    "type": "Part::Cut",
+    "props": {}
+  }
+]
+======================================================================
+TEST 4: prompt = 'Create a 10 x 10 x 10 mm box. Fillet its edge with a 100 mm radius.'
+======================================================================
+[SETUP] document cleared
+
+[RESULT] agent completed: True
+[RESULT] final_response: "The visible object is 'fillet1', a 10×10×10 mm box with one edge filleted with a 5 mm radius."
+[RESULT] session_tools: ['box', 'get_edges', 'fillet']
+
+[TRACE] ordered tool sequence: ['box', 'get_edges', 'fillet']
+
+[TRACE] per-tool detail:
+  step=1 tool=box args={'op': 'box', 'length': 10, 'width': 10, 'id': 'box1', 'height': 10} success=True error=None
+  step=2 tool=get_edges args={'object_name': 'box1'} success=True error=None
+  step=3 tool=fillet args={'target_id': 'box1', 'edge_refs': ['box1_edge_1'], 'id': 'fillet1', 'radius': 5, 'op': 'fillet'} success=True error=None
+  step=4 type=completion reply="The visible object is 'fillet1', a 10×10×10 mm box with one edge filleted with a 5 mm radius."
+
+[ANALYSIS] tool execution errors: []
+[ANALYSIS] failed-then-? entries (potential retries): 0
+
+[STATE] final FreeCAD objects:
+[
+  {
+    "id": "box1",
+    "type": "Part::Box",
+    "props": {
+      "Length": 10.0,
+      "Width": 10.0,
+      "Height": 10.0
+    }
+  },
+  {
+    "id": "fillet1",
+    "type": "Part::Fillet",
+    "props": {}
+  }
+]
