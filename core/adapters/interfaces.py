@@ -10,7 +10,7 @@ class CADAdapter(ABC):
         pass
 
     @abstractmethod
-    def execute_command(self, tool_name: str, parameters: Dict[str, Any]) -> str:
+    def execute_command(self, tool_name: str, **kwargs) -> str:
         """Execute a tool call against the CAD system."""
         pass
 
