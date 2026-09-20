@@ -117,6 +117,21 @@ class CADAgent:
         # Long-term conversation history: ONLY user prompts and final agent responses
         self.history = []
 
+    def _is_transient_error(self, error: RuntimeError) -> bool:
+        """Return True if the RuntimeError wraps a transient connection/transport failure.
+
+        The FreeCADAdapter wraps xmlrpc.client.ProtocolError, ConnectionError, and OSError
+        into RuntimeError. We check the error message for indicators of transient failures.
+        """
+        msg = str(error).lower()
+        # Connection-related transient indicators (covers XML-RPC and direct connection errors)
+        transient_indicators = [
+            "connection", "reset", "refused", "timeout", "unreachable",
+            "broken pipe", "connection aborted", "connection lost",
+            "cannot reach", "cannot connect",
+        ]
+        return any(ind in msg for ind in transient_indicators)
+
     def _summarize_state(self, state_str: str, max_items: int = 10) -> str:
         """Summarize CAD state to prevent context exhaustion on large assemblies.
 
@@ -262,16 +277,39 @@ class CADAgent:
                 session_tools.append(name)
                 print(
                     f"[Execution] Step {step+1}: Tool '{name}' with args: {args}")
-                try:
-                    out = self.adapter.execute_command(name, **args)
+
+                # Retry transient connection/transport failures up to MAX_RETRIES
+                out = None
+                for attempt in range(self.MAX_RETRIES + 1):
+                    try:
+                        out = self.adapter.execute_command(name, **args)
+                        break
+                    except (ConnectionError, OSError) as e:
+                        if attempt < self.MAX_RETRIES:
+                            print(
+                                f"[Retry] Step {step+1}: Tool '{name}' attempt {attempt + 1} failed with transient error: {e}. Retrying...")
+                            continue
+                        # Exhausted retries - re-raise to be caught below
+                        raise
+                    except RuntimeError as e:
+                        # Check if it's a wrapped connection/transport error
+                        if self._is_transient_error(e) and attempt < self.MAX_RETRIES:
+                            print(
+                                f"[Retry] Step {step+1}: Tool '{name}' attempt {attempt + 1} failed with transient error: {e}. Retrying...")
+                            continue
+                        # Non-transient or exhausted retries - re-raise
+                        raise
+
+                if out is not None:
                     results.append(out)
                     print(
                         f"[Execution] Step {step+1}: Tool '{name}' succeeded: {out}")
-                except Exception as e:
-                    error_msg = f"Execution error on {name}: {e}"
+                else:
+                    # This should not happen, but handle gracefully
+                    error_msg = f"Execution error on {name}: unknown error after retries"
                     results.append(error_msg)
                     print(
-                        f"\033[91m[ERROR] Step {step+1}: Tool '{name}' failed: {e}\033[0m")
+                        f"\033[91m[ERROR] Step {step+1}: Tool '{name}' failed: {error_msg}\033[0m")
 
             # 10. Append tool results to scratchpad as tool messages
             for i, tc in enumerate(response.tool_calls):
