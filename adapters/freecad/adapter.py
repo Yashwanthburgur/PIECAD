@@ -7,13 +7,14 @@ tool schemas (WHAT the LLM may request) and translates each structured call into
 a matching XML-RPC method name on a small, synchronous FreeCAD bridge (HOW it is
 actually executed). Core never sees FreeCAD internals.
 """
-
 import json
 import ast
 import re
 import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor, Future
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import xmlrpc.client
 
@@ -34,6 +35,136 @@ def _parse_dict_arg(arg, default_val):
     return default_val
 
 
+class _MCPWorker:
+    """Dedicated thread with its own event loop for MCP operations.
+
+    This avoids the 'asyncio.run() cannot be called from a running event loop'
+    error when the adapter is used from FastAPI/Uvicorn which already owns
+    the main event loop.
+    """
+
+    def __init__(self):
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: Optional[threading.Thread] = None
+        self._started = threading.Event()
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mcp-worker")
+        self._mcp_client = FreeCADMCPClient()
+        self._connected = False
+        self._lock = threading.Lock()
+
+    def _run_loop(self):
+        """Run the event loop in a dedicated thread."""
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        self._started.set()
+        self._loop.run_forever()
+
+    def start(self):
+        """Start the worker thread."""
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(
+            target=self._run_loop, daemon=True, name="mcp-worker")
+        self._thread.start()
+        self._started.wait(timeout=5.0)
+
+    def stop(self):
+        """Stop the worker thread."""
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._thread:
+            self._thread.join(timeout=5.0)
+        self._executor.shutdown(wait=True)
+
+    def _submit_async(self, coro):
+        """Submit an async coroutine to the worker's event loop and wait for result."""
+        if not self._started.is_set():
+            self.start()
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result(timeout=60.0)
+
+    def ensure_connected(self):
+        """Ensure MCP client is connected."""
+        with self._lock:
+            if self._connected and self._mcp_client and self._mcp_client._session:
+                return
+            if self._mcp_client is None:
+                self._mcp_client = FreeCADMCPClient()
+            self._submit_async(self._connect())
+            self._connected = True
+
+    async def _connect(self):
+        if self._mcp_client._session is None:
+            connected = await self._mcp_client.connect()
+            if not connected:
+                raise RuntimeError("Cannot connect to FreeCAD MCP server.")
+
+    async def _disconnect(self):
+        if self._mcp_client:
+            await self._mcp_client.disconnect()
+        self._connected = False
+
+    def list_tools(self) -> List[Dict[str, Any]]:
+        """Fetch and translate tools from the MCP server."""
+        async def _fetch():
+            await self._connect()
+            mcp_tools = await self._mcp_client.list_tools()
+            return [translate_mcp_to_openai(tool) for tool in mcp_tools]
+
+        try:
+            return self._submit_async(_fetch())
+        except Exception as e:
+            print(f"[FreeCADAdapter] Warning: MCP server unreachable - {e}")
+            return []
+
+    def execute_tool(self, name: str, args: Dict[str, Any]) -> str:
+        """Execute a tool through the external MCP server client."""
+        async def _execute():
+            await self._connect()
+            result = await self._mcp_client.call_tool(name, args)
+
+            structured = getattr(result, "structuredContent", None)
+            if structured is not None:
+                return json.dumps(structured, default=str)
+
+            content = getattr(result, "content", None)
+            if content is not None:
+                parts = []
+                for c in content:
+                    if hasattr(c, "text") and c.text is not None:
+                        parts.append(c.text)
+                    elif hasattr(c, "model_dump"):
+                        parts.append(json.dumps(c.model_dump(
+                            exclude_none=True), default=str))
+                    else:
+                        parts.append(str(c))
+                return "\n".join(parts)
+
+            return str(result)
+
+        try:
+            return self._submit_async(_execute())
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return json.dumps({"success": False, "error": str(e)})
+
+
+# Global worker instance (lazy initialization)
+_mcp_worker: Optional[_MCPWorker] = None
+_worker_lock = threading.Lock()
+
+
+def _get_mcp_worker() -> _MCPWorker:
+    """Get or create the global MCP worker."""
+    global _mcp_worker
+    with _worker_lock:
+        if _mcp_worker is None:
+            _mcp_worker = _MCPWorker()
+        return _mcp_worker
+
+
 class FreeCADAdapter(CADAdapter):
     """Concrete adapter for FreeCAD, driven through a synchronous XML-RPC bridge."""
 
@@ -42,7 +173,7 @@ class FreeCADAdapter(CADAdapter):
         self._proxy = xmlrpc.client.ServerProxy(self.url, allow_none=True)
         # External-tool client (robust MCP server) used for tools that the core
         # XML-RPC bridge does not implement (e.g. sketch constraints).
-        self.mcp_client = FreeCADMCPClient()
+        self.mcp_client = FreeCADMCPClient()  # kept for backward compatibility
         # Tool cache to avoid repeated MCP server launches
         self._cached_tools: List[Dict[str, Any]] | None = None
 
@@ -55,10 +186,11 @@ class FreeCADAdapter(CADAdapter):
         Connects the client on demand, delegates to ``mcp_client.call_tool``,
         and returns a JSON/serialized string result for the agent.
         """
-        import asyncio
-        return asyncio.run(self._async_mcp_tool(tool_name, arguments))
+        worker = _get_mcp_worker()
+        return worker.execute_tool(tool_name, arguments)
 
     async def _async_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Async version kept for backward compatibility."""
         if self.mcp_client._session is None:
             connected = await self.mcp_client.connect()
             if not connected:
@@ -139,7 +271,7 @@ class FreeCADAdapter(CADAdapter):
                         "diameter and ignore the numeric diameter for tapped holes."
                     ),
                     "parameters": Hole.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -147,7 +279,7 @@ class FreeCADAdapter(CADAdapter):
                     "name": "sketch",
                     "description": "Create a 2D sketch on a face of an existing object. Use get_faces first to find the face_ref.",
                     "parameters": Sketch.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -155,7 +287,7 @@ class FreeCADAdapter(CADAdapter):
                     "name": "extrude",
                     "description": "Extrude a sketch to create a solid (pad) or cut through material. Set is_cut=true for holes/cuts.",
                     "parameters": Extrude.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -177,7 +309,7 @@ class FreeCADAdapter(CADAdapter):
                     "name": "fillet",
                     "description": "Apply a fillet to a specific edge of an object. Use get_edges first to find the edge_ref.",
                     "parameters": Fillet.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -185,7 +317,7 @@ class FreeCADAdapter(CADAdapter):
                     "name": "chamfer",
                     "description": "Apply a chamfer to specific edges of an object. Use get_edges first to find the edge_refs.",
                     "parameters": Chamfer.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -193,7 +325,7 @@ class FreeCADAdapter(CADAdapter):
                     "name": "mate",
                     "description": "Mate two independent bodies. 'concentric' aligns the central axes of two cylinders/holes/circular edges; 'coincident' brings two planar faces into flush contact. Use get_faces or get_edges first to find the reference IDs.",
                     "parameters": Mate.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -201,7 +333,7 @@ class FreeCADAdapter(CADAdapter):
                     "name": "shell",
                     "description": "Hollow out a solid body into a thin-walled container/enclosure by removing the specified faces. Use get_faces first to find the face_refs to leave open. Use a negative thickness (e.g. -2.0) to shell inward.",
                     "parameters": Shell.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -209,7 +341,7 @@ class FreeCADAdapter(CADAdapter):
                     "name": "pattern_linear",
                     "description": "Create a linear array of copies of an existing object along a direction vector with a fixed step distance. NEVER manually create duplicate objects; use this tool to array them.",
                     "parameters": LinearPattern.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -217,7 +349,7 @@ class FreeCADAdapter(CADAdapter):
                     "name": "pattern_circular",
                     "description": "Create a circular array of copies of an existing object around an axis (e.g. a bolt circle). NEVER manually calculate coordinates; use this tool to array the object around the axis.",
                     "parameters": CircularPattern.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -225,7 +357,7 @@ class FreeCADAdapter(CADAdapter):
                     "name": "get_mass_properties",
                     "description": "Get engineering mass properties of a solid body: volume, center of mass, and bounding box. Useful for validating design dimensions and weight distribution.",
                     "parameters": GetMassProperties.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -233,7 +365,7 @@ class FreeCADAdapter(CADAdapter):
                     "name": "get_bom",
                     "description": "Generate a Bill of Materials: a list of all visible, distinct solid parts currently in the assembly document, with each part's name and volume.",
                     "parameters": GetBOM.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -241,7 +373,7 @@ class FreeCADAdapter(CADAdapter):
                     "name": "interference_check",
                     "description": "Run pairwise interference (clash) detection across all visible solids in the assembly (or a specified subset). Returns clash details including overlapping volume for each intersecting pair.",
                     "parameters": InterferenceCheck.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -249,7 +381,7 @@ class FreeCADAdapter(CADAdapter):
                     "name": "export",
                     "description": "Export the current visible assembly to a STEP or STL file. The file will be saved to the project's exports/ folder. Provide the desired format ('step' or 'stl') and a base filename without extension.",
                     "parameters": ExportModel.model_json_schema(),
-                }
+                },
             },
             {
                 "type": "function",
@@ -257,18 +389,14 @@ class FreeCADAdapter(CADAdapter):
                     "name": "edit_feature",
                     "description": "Modify the parametric properties of an existing CAD feature (e.g., changing Length, Width, Radius, Height). The CAD kernel will automatically cascade these changes to all downstream dependent features. Provide the target object ID and a dictionary of property names and their new float values.",
                     "parameters": EditFeature.model_json_schema(),
-                }
+                },
             },
         ]
 
     def _fetch_mcp_tools(self) -> List[Dict[str, Any]]:
         """Fetch and translate tools from the MCP server."""
-        try:
-            # Use asyncio.run to bridge sync-to-async
-            return asyncio.run(self._async_fetch_mcp_tools())
-        except Exception as e:
-            print(f"[FreeCADAdapter] Warning: MCP server unreachable - {e}")
-            return []
+        worker = _get_mcp_worker()
+        return worker.list_tools()
 
     async def _async_fetch_mcp_tools(self) -> List[Dict[str, Any]]:
         """Async helper to fetch and translate MCP tools."""
@@ -295,12 +423,8 @@ class FreeCADAdapter(CADAdapter):
         serialized MCP response. Disconnects the client cleanly after use.
         On failure returns a JSON failure dict.
         """
-        try:
-            return asyncio.run(self._async_execute_mcp_tool(name, args))
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return json.dumps({"success": False, "error": str(e)})
+        worker = _get_mcp_worker()
+        return worker.execute_tool(name, args)
 
     async def _async_execute_mcp_tool(self, name: str, args: Dict[str, Any]) -> str:
         """Async helper to execute an MCP tool and normalize its response."""
@@ -672,7 +796,7 @@ class FreeCADAdapter(CADAdapter):
                 obj_id = kwargs["id"]
                 target_id = kwargs["target_id"]
                 direction = _parse_dict_arg(kwargs.get("direction"), {
-                                            "x": 1.0, "y": 0.0, "z": 0.0})
+                    "x": 1.0, "y": 0.0, "z": 0.0})
                 distance = float(kwargs["distance"])
                 count = int(kwargs["count"])
 
@@ -690,9 +814,9 @@ class FreeCADAdapter(CADAdapter):
                 obj_id = kwargs["id"]
                 target_id = kwargs["target_id"]
                 axis_origin = _parse_dict_arg(kwargs.get("axis_origin"), {
-                                              "x": 0.0, "y": 0.0, "z": 0.0})
+                    "x": 0.0, "y": 0.0, "z": 0.0})
                 axis_direction = _parse_dict_arg(kwargs.get("axis_direction"), {
-                                                 "x": 0.0, "y": 0.0, "z": 1.0})
+                    "x": 0.0, "y": 0.0, "z": 1.0})
                 angle = float(kwargs["angle"])
                 count = int(kwargs["count"])
 
