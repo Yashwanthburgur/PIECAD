@@ -204,10 +204,24 @@ class SessionMemory:
                 wanted_kinds.add(kind)
 
         # 2. Concept-signal synonyms also imply related memory kinds (e.g. a
-        #    "hole" request maps to conventions + preferences).
+        #    "hole" request maps to conventions + preferences). These are BROAD
+        #    selections and must still be filtered per-entry; they never activate
+        #    the under-specified fallback.
+        concept_kinds: set = set()
         for concept, kinds in _CONCEPT_TO_KINDS.items():
             if any(kw in text_l for kw in _OBJECT_SIGNALS.get(concept, ())):
                 wanted_kinds.update(kinds)
+                concept_kinds.update(kinds)
+
+        # Word-level request tokens: use exact word matches so single letters /
+        # stopwords like "a" do not accidentally match inside other words, e.g.
+        # "a" inside "surfACE".
+        req_words = set(text_l.split())
+
+        # Concept-synonym keywords dict keyed by concept name -> tuple of words.
+        concept_words = {
+            kw for kws in _OBJECT_SIGNALS.values() for kw in kws
+        }
 
         selected: Dict[str, Any] = {}
         for kind in list(wanted_kinds):
@@ -216,14 +230,31 @@ class SessionMemory:
                 if entry.kind != kind:
                     continue
                 haystack = f"{entry.key} {entry.value}".lower()
-                # Include when the entry itself mentions a concept in the request,
-                # or when a free-text signal applies, or key/value contain text.
-                if any(sig in haystack for sig in text_l.split()) or \
-                        any(sig in haystack for sig in _OBJECT_SIGNALS.get(kind, ())) or \
-                        any(sig in text_l for sig in _KIND_SIGNALS.get(kind, ())):
+                entry_words = set(haystack.split())
+                # Entry-dependent relevance only; each condition inspects THIS
+                # entry's key/value so unrelated entries of a wanted kind do NOT
+                # leak just because the request mentions that kind.
+                #  1) the entry shares an actual WORD with the request, OR
+                #  2) the request mentions a concept word (e.g. "hole") AND that
+                #     concept word also occurs in this entry's key/value text.
+                shares_token = bool(req_words & entry_words)
+                shares_concept = any(
+                    kw in req_words and kw in haystack for kw in concept_words)
+                if shares_token or shares_concept:
                     matches.append(entry.value)
             if matches:
                 selected[kind] = list(dict.fromkeys(matches))
+
+        # Fallback ONLY for directly-signalled (narrow) kinds, e.g. "reverse that
+        # choice" picks a decision but no entry content-matched. Broad concept-
+        # derived kinds (hole -> conventions) are NOT dumped here; they are only
+        # ever included if an entry genuinely matched its content above.
+        if not selected:
+            narrow = list(wanted_kinds - concept_kinds)
+            for kind in narrow:
+                vals = [e.value for e in self.by_kind(kind)]
+                if vals:
+                    selected[kind] = list(dict.fromkeys(vals))
 
         if max_items is not None and max_items > 0:
             # Trim each section to the budget while preserving order.

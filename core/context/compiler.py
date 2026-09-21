@@ -168,7 +168,7 @@ class ContextCompiler:
     ) -> Dict[str, Any]:
         if session_memory is None:
             return {}
-        from .memory import resolve_section_kinds  # local import
+        from .memory import resolve_section_kinds, _OBJECT_SIGNALS  # local import
 
         # Map the plan's requested memory sections (which are plural, e.g.
         # "conventions") onto concrete memory kinds (e.g. "convention").
@@ -179,18 +179,16 @@ class ContextCompiler:
                     wanted_kinds.append(kind)
 
         if wanted_kinds:
-            # Selective pull: only the kinds the plan requires, and only entries
-            # whose key/value text matches the request OR the kind signal.
+            # Selective pull: compute the relevance layer's choice of memory
+            # (which is already filtered per-entry in SessionMemory.relevant),
+            # then keep ONLY the sections the plan requires. No fallback that
+            # could re-introduce "every entry of a wanted kind" leakage.
+            relevant = session_memory.relevant(user_message)
             constrained: Dict[str, Any] = {}
             for kind in wanted_kinds:
-                entries = []
-                for entry in session_memory.by_kind(kind):
-                    hay = f"{entry.key} {entry.value}".lower()
-                    if any(seg in hay for seg in user_message.lower().split()) or \
-                            entry.kind in resolve_section_kinds(kind):
-                        entries.append(entry.value)
+                entries = relevant.get(kind)
                 if entries:
-                    constrained[kind] = list(dict.fromkeys(entries))
+                    constrained[kind] = list(entries)
             return constrained
 
         # No plan-specified sections: fall back to free-text relevance.
