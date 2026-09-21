@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import json  # noqa: E402
 
 from core.adapters.interfaces import CADAdapter  # noqa: E402
+from core.agent import CADAgent  # noqa: E402
 
 
 class ScriptedProvider:
@@ -108,7 +109,8 @@ def test_agent_records_conversation():
     agent = CADAgent(adapter=StubAdapter(), provider=prov)
     agent.handle_message("Create a box")
     # The user request + assistant reply are recorded in conversation context.
-    texts = " ".join(t.content or "" for t in agent.conversation.recent_turns())
+    texts = " ".join(
+        t.content or "" for t in agent.conversation.recent_turns())
     assert "Create a box" in texts
     assert "Created." in texts
 
@@ -165,3 +167,53 @@ def test_agent_react_multi_step_iteration():
     # Both operations tracked.
     tools_used = {op.tool for op in agent.design_state.get_recent_operations()}
     assert {"box", "hole"} <= tools_used
+
+
+def test_agent_captures_exact_provider_tokens_in_telemetry():
+    """BIP 4.2.1: exact provider token usage must be wired into telemetry
+    (and kept distinct from estimated context tokens)."""
+    class UsageProvider(ScriptedProvider):
+        def __init__(self, script):
+            super().__init__(script)
+            self.last_usage = {
+                "prompt_tokens": 1200,
+                "completion_tokens": 240,
+                "total_tokens": 1440,
+            }
+
+    prov = UsageProvider([("Created.", None)])
+    agent = CADAgent(adapter=StubAdapter(), provider=prov)
+    reply, _ = agent.handle_message("Create a box")
+    tel = agent.get_context_telemetry()
+    assert tel, "expected at least one telemetry entry"
+    entry = tel[0]
+    # Exact provider-reported tokens are captured separately.
+    assert entry["exact_provider_tokens"] == {
+        "prompt_tokens": 1200,
+        "completion_tokens": 240,
+        "total_tokens": 1440,
+    }
+    assert entry["input_tokens"] == 1200
+    assert entry["output_tokens"] == 240
+    assert entry["total_tokens"] == 1440
+    # The estimated context tokens remain distinct from exact values.
+    assert entry["estimated_context_tokens"] > 0
+    assert entry["estimated_context_tokens"] != entry["total_tokens"]
+
+
+def test_agent_handles_provider_without_usage():
+    """A provider that does not report usage must not break handle_message. """
+
+    class NoUsageProvider(ScriptedProvider):
+        def __init__(self, script):
+            super().__init__(script)
+            # last_usage defaults to None when not exposed.
+
+    prov = NoUsageProvider([("Done.", None)])
+    agent = CADAgent(adapter=StubAdapter(), provider=prov)
+    reply, _ = agent.handle_message("Create a box")
+    tel = agent.get_context_telemetry()
+    assert tel
+    # No exact provider tokens present; no fabricated values.
+    assert tel[0]["exact_provider_tokens"] is None
+    assert tel[0]["input_tokens"] is None

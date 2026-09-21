@@ -271,10 +271,6 @@ class CADAgent:
                 f"(routed OR plan-required)"
             )
 
-            # Record compiled-context telemetry (estimates only).
-            if compiled.telemetry is not None:
-                self._context_telemetry.append(compiled.telemetry.to_dict())
-
             # 4. Build messages from the compiled context: system (selective
             #     state) + relevant conversation + scratchpad.
             dynamic_system = compiled.system_context
@@ -286,6 +282,23 @@ class CADAgent:
             response = self.provider.generate_with_tools(
                 messages=messages, tools=tools
             )
+            # Exact provider-reported token usage (None when a provider does not
+            # report usage, or for stubs that do not expose last_usage).
+            provider_usage = getattr(self.provider, "last_usage", None)
+
+            # Record compiled-context telemetry after the LLM call, attaching
+            # the exact provider-reported token usage (if the provider supplied
+            # it). Estimates and exact usage remain clearly separate fields.
+            if compiled.telemetry is not None:
+                compiled.telemetry.exact_provider_tokens = provider_usage
+                if provider_usage:
+                    compiled.telemetry.input_tokens = provider_usage.get(
+                        "prompt_tokens")
+                    compiled.telemetry.output_tokens = provider_usage.get(
+                        "completion_tokens")
+                    compiled.telemetry.total_tokens = provider_usage.get(
+                        "total_tokens")
+                self._context_telemetry.append(compiled.telemetry.to_dict())
 
             # 7. If LLM returns plain text (NO tool calls): agent is done
             if not getattr(response, "tool_calls", None):

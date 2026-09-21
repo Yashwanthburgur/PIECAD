@@ -42,12 +42,22 @@ class LLMProvider:
             base_url=self.base_url,
         )
 
+        # Exact provider token usage from the most recent generate_with_tools
+        # call (None when the provider does not report usage).
+        self.last_usage: Optional[Dict[str, Any]] = None
+
     def generate_with_tools(
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Any:
-        """Sends chat messages and optional tool definitions to the LLM."""
+        """Sends chat messages and optional tool definitions to the LLM.
+
+        The return value (the assistant message) is unchanged for backward
+        compatibility. Exact provider token usage, when reported by the API, is
+        stored on ``self.last_usage`` (a dict with prompt_tokens /
+        completion_tokens / total_tokens) or None when unavailable.
+        """
         kwargs: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -57,4 +67,18 @@ class LLMProvider:
             kwargs["tool_choice"] = "auto"
 
         response = self.client.chat.completions.create(**kwargs)
-        return response.choices[0].message
+        message = response.choices[0].message
+
+        # Capture exact provider token usage if the API reports it.
+        self.last_usage = None
+        if hasattr(response, 'usage') and response.usage:
+            usage = {
+                "prompt_tokens": getattr(response.usage, 'prompt_tokens', None),
+                "completion_tokens": getattr(response.usage, 'completion_tokens', None),
+                "total_tokens": getattr(response.usage, 'total_tokens', None),
+            }
+            usage = {k: v for k, v in usage.items() if v is not None}
+            if usage:
+                self.last_usage = usage
+
+        return message
