@@ -15,7 +15,12 @@ def _impl_get_state():
     """Get state of all objects in the active document as a hierarchical DAG.
 
     Runs on the main thread via the QTimer queue system.
-    Returns a JSON string with object id, label, type, visibility, parent/child relationships, and properties.
+    Returns a JSON string with object id, label, type, visibility, parent/child
+    relationships, properties, and authoritative geometry verification fields:
+    - shape_is_valid: bool (from Shape.isValid())
+    - shape_is_null: bool (from Shape.isNull())
+    - shape_volume: float (from Shape.Volume)
+    - shape_type: str (from Shape.ShapeType)
     """
     doc = _active_doc()
     objects_state = []
@@ -45,6 +50,33 @@ def _impl_get_state():
                     obj_info["properties"][param] = float(getattr(obj, param))
                 except (TypeError, ValueError, AttributeError):
                     pass  # Skip non-numeric or inaccessible properties
+
+        # --- Authoritative geometry verification fields (BIP 4.3.3) ---
+        # These come directly from the FreeCAD kernel's Shape, not derived.
+        if hasattr(obj, "Shape") and obj.Shape is not None:
+            shape = obj.Shape
+            try:
+                obj_info["shape_is_valid"] = bool(shape.isValid())
+            except Exception:
+                obj_info["shape_is_valid"] = None
+            try:
+                obj_info["shape_is_null"] = bool(shape.isNull())
+            except Exception:
+                obj_info["shape_is_null"] = None
+            try:
+                obj_info["shape_volume"] = float(shape.Volume)
+            except Exception:
+                obj_info["shape_volume"] = None
+            try:
+                obj_info["shape_type"] = str(shape.ShapeType)
+            except Exception:
+                obj_info["shape_type"] = None
+        else:
+            # No Shape attribute or Shape is None - geometry unavailable
+            obj_info["shape_is_valid"] = None
+            obj_info["shape_is_null"] = None
+            obj_info["shape_volume"] = None
+            obj_info["shape_type"] = None
 
         objects_state.append(obj_info)
 

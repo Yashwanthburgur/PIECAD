@@ -528,6 +528,7 @@ class CADAgent:
             # After EVERY successful tool execution, refresh DesignState from the
             # live CAD state BEFORE the next ReAct iteration. This ensures the
             # compiled context for the next step reflects the actual CAD state.
+            state_retrieval_failed = False
             try:
                 new_state_json = self.adapter.get_state()
                 new_state = json.loads(new_state_json)
@@ -538,9 +539,31 @@ class CADAgent:
                     f"[Agent] Warning: Failed to get state for verification/sync: {e}")
                 # Mark state as unavailable but preserve last known-good objects.
                 self.design_state.mark_state_unavailable()
+                state_retrieval_failed = True
                 new_state = []
 
             errors = check_geometry(new_state)
+
+            # If state retrieval failed, inject a structured uncertainty notice.
+            # Do NOT treat unavailable verification as valid.
+            if state_retrieval_failed:
+                uncertainty_warning = (
+                    "WARNING: Geometry verification unavailable after last operation "
+                    "(CAD state retrieval failed). The authoritative CAD state could "
+                    "not be queried. You must verify the result manually or retry."
+                )
+                print(f"\033[93m[VERIFY] {uncertainty_warning}\033[0m")
+                scratchpad.append({
+                    "role": "system",
+                    "content": uncertainty_warning,
+                })
+                if self._capture_trace:
+                    self._trace.append({
+                        "step": step + 1,
+                        "type": "geometry_verification_unavailable",
+                        "reason": "state_retrieval_failed",
+                    })
+
             if errors:
                 warning = (
                     "WARNING: Geometry validation failed after last operation: "

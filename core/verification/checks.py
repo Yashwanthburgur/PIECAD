@@ -140,15 +140,28 @@ class GeometryVerifier:
 
 
 def check_geometry(state_objects: list) -> List[str]:
-    """Inspect the CAD state for signs of degenerate geometry.
+    """Inspect the CAD state for signs of degenerate geometry using authoritative
+    kernel-provided fields (shape_is_valid, shape_is_null, shape_volume, shape_type).
 
     Args:
         state_objects: Parsed CAD state (a list of object dicts). Each object
-            may carry a ``volume`` and/or an explicit invalid/null shape flag.
+            should carry kernel-provided fields:
+            - shape_is_valid: bool (from Shape.isValid())
+            - shape_is_null: bool (from Shape.isNull())
+            - shape_volume: float (from Shape.Volume)
+            - shape_type: str (from Shape.ShapeType)
 
     Returns:
         A list of human-readable error strings describing every degenerate
         object found. Returns an empty list if all geometry is valid.
+
+    Behavior:
+        - valid geometry (shape_is_valid=True, shape_is_null=False, volume>0) -> no error
+        - invalid geometry (shape_is_valid=False) -> error
+        - null shape (shape_is_null=True) -> error
+        - zero/negative volume -> error
+        - missing object (not in state_objects) -> not checked here (caller handles)
+        - unavailable geometry (shape_is_valid=None) -> error with "unavailable" note
     """
     errors: List[str] = []
 
@@ -162,29 +175,53 @@ def check_geometry(state_objects: list) -> List[str]:
         obj_name = obj.get("id") or obj.get(
             "label") or obj.get("name") or "unknown"
 
-        # 1. Explicitly reported volume that is non-positive.
-        volume = obj.get("volume")
-        if volume is not None:
+        # Authoritative kernel-provided fields (BIP 4.3.3)
+        shape_is_valid = obj.get("shape_is_valid")
+        shape_is_null = obj.get("shape_is_null")
+        shape_volume = obj.get("shape_volume")
+        shape_type = obj.get("shape_type")
+
+        # 1. Unavailable geometry state - kernel couldn't provide validity info
+        if shape_is_valid is None:
+            errors.append(
+                f"Object '{obj_name}': geometry verification unavailable "
+                f"(kernel did not provide shape_is_valid)."
+            )
+            continue  # Cannot make further determinations without kernel data
+
+        # 2. Explicit invalid shape from kernel
+        if shape_is_valid is False:
+            errors.append(
+                f"Object '{obj_name}': kernel reports invalid shape "
+                f"(Shape.isValid() == False)."
+            )
+
+        # 3. Null shape from kernel
+        if shape_is_null is True:
+            errors.append(
+                f"Object '{obj_name}': kernel reports null shape "
+                f"(Shape.isNull() == True)."
+            )
+
+        # 4. Volume check - zero or negative volume is degenerate
+        if shape_volume is not None:
             try:
-                vol = float(volume)
+                vol = float(shape_volume)
             except (TypeError, ValueError):
                 vol = None
             if vol is not None and vol <= 0.0:
                 errors.append(
-                    f"Object '{obj_name}' resulted in zero/negative volume "
+                    f"Object '{obj_name}' has zero/negative volume "
                     f"({vol}) (degenerate)."
                 )
-
-        # 2. Explicit invalid or null shape flag.
-        shape_type = obj.get("shape_type")
-        is_valid = obj.get("is_valid")
-        shape_null = obj.get("shape_null")
-        if shape_null is True or is_valid is False:
+        else:
+            # Volume unavailable from kernel
             errors.append(
-                f"Object '{obj_name}' reports an invalid or null shape "
-                f"(degenerate)."
+                f"Object '{obj_name}': volume unavailable from kernel."
             )
-        elif isinstance(shape_type, str) and shape_type.lower() in (
+
+        # 5. Shape type as supplementary info (for debugging/visibility)
+        if isinstance(shape_type, str) and shape_type.lower() in (
             "null", "invalid", "none", "empty"
         ):
             errors.append(
