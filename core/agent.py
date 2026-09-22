@@ -300,22 +300,41 @@ class CADAgent:
                         "total_tokens")
                 self._context_telemetry.append(compiled.telemetry.to_dict())
 
-            # 7. If LLM returns plain text (NO tool calls): agent is done
+            # 7. If LLM returns plain text (NO tool calls):
+            #    - meaningful content -> normal completion.
+            #    - empty/None content -> do NOT claim "Done."; keep going so the
+            #      LLM can produce a real response (bounded by MAX_STEPS).
             if not getattr(response, "tool_calls", None):
-                reply = response.content or "Done."
+                raw_content = getattr(response, "content", None)
+                reply = raw_content.strip() if isinstance(
+                    raw_content, str) else None
+                if reply:
+                    print(
+                        f"[Agent] Finished reasoning (no tool calls). Final response: {reply}")
+                    # Append final response to long-term history
+                    self.history.append(
+                        {"role": "assistant", "content": reply})
+                    self.conversation.add_assistant(reply)
+                    if self._capture_trace:
+                        self._trace.append({
+                            "step": step + 1,
+                            "type": "completion",
+                            "reply": reply,
+                            "termination_reason": "no_tool_calls",
+                        })
+                    return reply, session_tools
+                # Empty response: do not fabricate success. Continue the ReAct
+                # loop; if steps remain the LLM gets another chance.
                 print(
-                    f"[Agent] Finished reasoning (no tool calls). Final response: {reply}")
-                # Append final response to long-term history
-                self.history.append({"role": "assistant", "content": reply})
-                self.conversation.add_assistant(reply)
+                    f"[Agent] WARNING: empty LLM response at step {step+1} "
+                    "(no tool calls, no meaningful content). Continuing loop.")
                 if self._capture_trace:
                     self._trace.append({
                         "step": step + 1,
-                        "type": "completion",
-                        "reply": reply,
-                        "termination_reason": "no_tool_calls",
+                        "type": "empty_response",
+                        "termination_reason": "empty_response_continue",
                     })
-                return reply, session_tools
+                continue
 
             # 8. LLM returned tool calls - append assistant message to scratchpad
             scratchpad.append({
@@ -324,56 +343,112 @@ class CADAgent:
                 "tool_calls": response.tool_calls
             })
 
-            # 9. Execute tool calls through the adapter
+            # 9. Execute tool calls through the adapter.
+            #    - Malformed tool arguments are captured as a recoverable error.
+            #    - Transient connection/transport failures keep their existing
+            #      retry treatment.
+            #    - Non-transient (CAD/kernel) failures are NOT allowed to abort the
+            #      turn: they are converted to a structured tool result and
+            #      returned to the LLM so it can reason about recovery.
             results = []
 
             for tc in response.tool_calls:
                 name = tc.function.name
-                args = json.loads(tc.function.arguments)
-                # Record this session's tool usage.
+                # Record this session's tool usage (attempted, even on failure).
                 session_tools.append(name)
+
+                # --- Defensively parse tool arguments (recoverable error) ---
+                try:
+                    args = json.loads(tc.function.arguments)
+                    if not isinstance(args, dict):
+                        args = {}
+                except (json.JSONDecodeError, TypeError) as e:
+                    print(
+                        f"\033[91m[ERROR] Step {step+1}: Tool '{name}' malformed "
+                        f"arguments: {e}\033[0m")
+                    results.append(json.dumps({
+                        "status": "error",
+                        "tool": name,
+                        "error_type": type(e).__name__,
+                        "error": f"Malformed tool arguments (invalid JSON): {e}",
+                        "arguments": {},
+                        "transient": False,
+                        "retries": 0,
+                    }, default=str))
+                    self._record_tool_outcome(
+                        name, {}, False,
+                        error=f"Malformed tool arguments (invalid JSON): {e}",
+                        out=None)
+                    if self._capture_trace:
+                        self._trace.append({
+                            "step": step + 1,
+                            "tool": name,
+                            "arguments": {},
+                            "result": None,
+                            "success": False,
+                            "error": f"Malformed tool arguments (invalid JSON): {e}",
+                            "attempt": 1,
+                        })
+                    continue
+
                 print(
                     f"[Execution] Step {step+1}: Tool '{name}' with args: {args}")
 
-                # Retry transient connection/transport failures up to MAX_RETRIES
+                # --- Execute with transient retry; retain non-transient errors ---
                 out = None
                 error = None
                 success = False
+                attempts = 0
+                transient = False
                 for attempt in range(self.MAX_RETRIES + 1):
+                    attempts = attempt + 1
                     try:
                         out = self.adapter.execute_command(name, **args)
                         success = True
                         break
                     except (ConnectionError, OSError) as e:
                         error = e
+                        transient = True
+                        attempts = attempt + 1
                         if attempt < self.MAX_RETRIES:
                             print(
                                 f"[Retry] Step {step+1}: Tool '{name}' attempt {attempt + 1} failed with transient error: {e}. Retrying...")
                             continue
-                        # Exhausted retries - re-raise to be caught below
-                        raise
+                        # Exhausted transient retries -> recoverable failure.
+                        break
                     except RuntimeError as e:
                         error = e
-                        # Check if it's a wrapped connection/transport error
-                        if self._is_transient_error(e) and attempt < self.MAX_RETRIES:
+                        transient = self._is_transient_error(e)
+                        attempts = attempt + 1
+                        if transient and attempt < self.MAX_RETRIES:
                             print(
                                 f"[Retry] Step {step+1}: Tool '{name}' attempt {attempt + 1} failed with transient error: {e}. Retrying...")
                             continue
-                        # Non-transient or exhausted retries - re-raise
-                        raise
+                        # Non-transient failure (or exhausted transient retries)
+                        # -> capture for the LLM, do NOT abort the turn.
+                        break
 
-                if out is not None:
+                if success:
                     results.append(out)
                     print(
                         f"[Execution] Step {step+1}: Tool '{name}' succeeded: {out}")
+                    error_msg = None
                 else:
-                    # This should not happen, but handle gracefully
-                    error_msg = f"Execution error on {name}: unknown error after retries"
-                    results.append(error_msg)
-                    success = False
-                    error = RuntimeError(error_msg)
+                    if error is None:
+                        error = RuntimeError(
+                            f"Execution error on {name}: unknown error after retries")
+                    error_msg = str(error)
                     print(
                         f"\033[91m[ERROR] Step {step+1}: Tool '{name}' failed: {error_msg}\033[0m")
+                    results.append(json.dumps({
+                        "status": "error",
+                        "tool": name,
+                        "error_type": type(error).__name__,
+                        "error": error_msg,
+                        "arguments": args,
+                        "transient": transient,
+                        "retries": attempts - 1,
+                    }, default=str))
 
                 # Record trace entry if capture_trace is enabled
                 if self._capture_trace:
@@ -381,26 +456,30 @@ class CADAgent:
                         "step": step + 1,
                         "tool": name,
                         "arguments": args,
-                        "result": out if out is not None else (str(error) if error else error_msg),
+                        "result": out if out is not None else error_msg,
                         "success": success,
-                        "error": str(error) if error and not success else None,
-                        "attempt": attempt + 1 if 'attempt' in locals() else 1,
+                        "error": error_msg if not success else None,
+                        "attempt": attempts,
+                        "transient": transient,
                     })
 
-                # Record the tool outcome into the authoritative DesignState
-                # (recent operations / recent errors / target listing).
+                # Record the tool outcome into the authoritative DesignState.
+                # A failed operation is recorded as failed (never as success) and
+                # never fabricates a CAD object.
                 self._record_tool_outcome(
                     name, args, success,
-                    error=(str(error) if error and not success else None),
+                    error=(error_msg if not success else None),
                     out=out,
                 )
 
-            # 10. Append tool results to scratchpad as tool messages
-            for i, tc in enumerate(response.tool_calls):
+            # 10. Append tool results to scratchpad as tool messages. Every
+            #     tool_call gets exactly one result entry (success, structured
+            #     error, or malformed-args error), so the lists stay aligned.
+            for tc, res in zip(response.tool_calls, results):
                 scratchpad.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": results[i]
+                    "content": res
                 })
 
             # 10a. Runtime geometry verification: after a tool execution, check
