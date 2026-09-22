@@ -118,13 +118,23 @@ class RecentOperation:
     success: bool = True
     ts: float = field(default_factory=_current_ts)
 
+    # BIP 4.3.2: Requested-vs-achieved integrity.
+    # When a recovery operation changes parameters (e.g., requested radius 500,
+    # achieved radius 5), we preserve the originally requested args so the
+    # LLM and final response can see the mismatch. The `args` field holds the
+    # final achieved parameters; `requested_args` holds the original request.
+    requested_args: Optional[Dict[str, Any]] = None
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "tool": self.tool,
             "target_id": self.target_id,
             "success": self.success,
             "args": dict(self.args),
         }
+        if self.requested_args is not None:
+            d["requested_args"] = dict(self.requested_args)
+        return d
 
 
 @dataclass
@@ -152,6 +162,14 @@ class DesignState:
     # (e.g. "selection is an edge"). Kept explicit and small.
     derived_facts: Dict[str, Any] = field(default_factory=dict)
 
+    # State availability tracking (BIP 4.3.2): distinguishes between an empty
+    # document and a document whose authoritative state is currently unknown
+    # due to a failed retrieval. When retrieval fails, we preserve the last
+    # known-good objects and mark state as UNAVAILABLE.
+    state_available: bool = True
+    state_stale: bool = False
+    last_successful_sync: Optional[float] = None
+
     # ---- construction / updates ---------------------------------------- #
 
     def update_from_cad_state(self, state_json: str) -> "DesignState":
@@ -164,6 +182,9 @@ class DesignState:
             parsed = json.loads(state_json) if isinstance(
                 state_json, str) else state_json
         except (json.JSONDecodeError, TypeError):
+            # Mark state as unavailable without wiping objects.
+            self.state_available = False
+            self.state_stale = True
             return self
 
         if isinstance(parsed, dict):
@@ -174,6 +195,9 @@ class DesignState:
                     break
 
         if not isinstance(parsed, list):
+            # Mark state as unavailable without wiping objects.
+            self.state_available = False
+            self.state_stale = True
             return self
 
         self.objects.clear()
@@ -183,7 +207,22 @@ class DesignState:
             obj = DesignObject.from_dict(raw)
             self.objects[obj.object_id] = obj
 
+        # Successful sync — state is fresh and available.
+        self.state_available = True
+        self.state_stale = False
+        self.last_successful_sync = _current_ts()
         self._derive_facts()
+        return self
+
+    def mark_state_unavailable(self) -> "DesignState":
+        """Mark the CAD state as unavailable without clearing known objects.
+
+        Called when a state retrieval fails (connection error, timeout, etc.).
+        The last known-good objects are preserved but flagged as stale.
+        """
+        if self.state_available:
+            self.state_available = False
+            self.state_stale = True
         return self
 
     def update_from_tool_result(
@@ -195,6 +234,7 @@ class DesignState:
         args: Optional[Dict[str, Any]] = None,
         success: bool = True,
         error: Optional[str] = None,
+        requested_args: Optional[Dict[str, Any]] = None,
     ) -> "DesignState":
         """Record the outcome of a CAD tool execution into the state.
 
@@ -205,7 +245,8 @@ class DesignState:
         if success:
             self.recent_operations.append(
                 RecentOperation(tool=tool, target_id=target_id,
-                                args=args or {})
+                                args=args or {},
+                                requested_args=requested_args)
             )
             self.recent_operations = self._bounded(self.recent_operations, 20)
         if error:
@@ -281,6 +322,9 @@ class DesignState:
             "current_task": self.current_task,
             "current_intent": dict(self.current_intent) if self.current_intent else None,
             "derived_facts": dict(self.derived_facts),
+            "state_available": self.state_available,
+            "state_stale": self.state_stale,
+            "last_successful_sync": self.last_successful_sync,
         }
 
     def clear(self) -> "DesignState":
@@ -344,6 +388,8 @@ class DesignState:
                 o.object_id: o.object_type for o in self.objects.values()
             },
             "derived_facts": dict(self.derived_facts),
+            "state_available": self.state_available,
+            "state_stale": self.state_stale,
         }
 
     # ---- internals ------------------------------------------------------- #

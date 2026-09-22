@@ -923,14 +923,18 @@ class FreeCADAdapter(CADAdapter):
         """Return a JSON string representing the current document objects.
 
         Calls the bridge's get_state method and returns the JSON result.
-        Catches connection errors gracefully, returning "[]" if the bridge is not reachable.
+        On connection/transport errors, raises RuntimeError so callers can
+        distinguish a failed retrieval from an empty document.
         """
         try:
             return str(self._proxy.get_state())
-        except (ConnectionError, OSError):
-            return "[]"
-        except Exception:
-            return "[]"
+        except (ConnectionError, OSError) as e:
+            raise RuntimeError(
+                f"Cannot reach FreeCAD bridge at {self.url}: {e}") from e
+        except Exception as e:
+            # Wrap unexpected errors to preserve the exception chain.
+            raise RuntimeError(
+                f"Unexpected error getting CAD state: {e}") from e
 
     # ------------------------------------------------------------------ #
     # Document Management

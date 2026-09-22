@@ -146,6 +146,12 @@ class CADAgent:
         # without dumping large payloads into normal logs.
         self._context_telemetry: List[Dict[str, Any]] = []
 
+        # BIP 4.3.2: Track last failed tool args per (tool, target) for
+        # requested-vs-achieved integrity. When a tool fails with a non-transient
+        # error, we remember the requested args. If the next successful call to
+        # the same tool/target has different args, both are preserved.
+        self._last_failed_args: Dict[tuple, Dict[str, Any]] = {}
+
     def _is_transient_error(self, error: RuntimeError) -> bool:
         """Return True if the RuntimeError wraps a transient connection/transport failure.
 
@@ -169,13 +175,21 @@ class CADAgent:
         self.design_state.update_from_cad_state(state_json)
 
     def _record_tool_outcome(self, name: str, args: dict, success: bool,
-                             error: Optional[str] = None, out: Any = None) -> None:
-        """Record a tool outcome into DesignState recent_operations/errors."""
+                             error: Optional[str] = None, out: Any = None,
+                             requested_args: Optional[Dict[str, Any]] = None) -> None:
+        """Record a tool outcome into DesignState recent_operations/errors.
+
+        Args:
+            requested_args: The originally requested parameters (before recovery).
+                If provided and different from `args`, both are preserved so the
+                LLM can see the requested-vs-achieved mismatch.
+        """
         target = args.get("target_id") or args.get("target") or \
             args.get("object") or args.get("object_name")
         self.design_state.update_from_tool_result(
             tool=name, result=out, target_id=target, args=args,
             success=success, error=error,
+            requested_args=requested_args,
         )
 
     def get_context_telemetry(self) -> List[Dict[str, Any]]:
@@ -236,6 +250,10 @@ class CADAgent:
                 state_json = self.adapter.get_state()
             except Exception as e:
                 print(f"[Agent] Warning: Failed to get state: {e}")
+                # Mark DesignState as unavailable but PRESERVE last known-good objects.
+                self.design_state.mark_state_unavailable()
+                # Continue with an empty state for router gating; the compiler will
+                # see state_available=false and can expose the stale summary.
                 state_json = "[]"
 
             # 2a. Parse state into objects for router-based tool gating.
@@ -309,8 +327,11 @@ class CADAgent:
                 reply = raw_content.strip() if isinstance(
                     raw_content, str) else None
                 if reply:
+                    # Safely encode for Windows console (cp1252).
+                    safe_reply = reply.encode(
+                        'ascii', 'replace').decode('ascii')
                     print(
-                        f"[Agent] Finished reasoning (no tool calls). Final response: {reply}")
+                        f"[Agent] Finished reasoning (no tool calls). Final response: {safe_reply}")
                     # Append final response to long-term history
                     self.history.append(
                         {"role": "assistant", "content": reply})
@@ -391,6 +412,10 @@ class CADAgent:
                         })
                     continue
 
+                # Target object id for requested-vs-achieved tracking (BIP 4.3.2).
+                target = args.get("target_id") or args.get("target") or \
+                    args.get("object") or args.get("object_name")
+
                 print(
                     f"[Execution] Step {step+1}: Tool '{name}' with args: {args}")
 
@@ -427,6 +452,22 @@ class CADAgent:
                         # Non-transient failure (or exhausted transient retries)
                         # -> capture for the LLM, do NOT abort the turn.
                         break
+
+                # BIP 4.3.2: Track requested-vs-achieved integrity.
+                # If a tool fails non-transiently, remember the requested args.
+                # If it succeeds on a subsequent attempt with different args,
+                # preserve both so the LLM can see the mismatch.
+                tool_key = (name, target)
+                requested_args_for_recording = None
+                if not success and not transient:
+                    # Non-transient failure: store the requested args for this tool/target.
+                    self._last_failed_args[tool_key] = dict(args)
+                elif success and tool_key in self._last_failed_args:
+                    # Success after a prior non-transient failure on same tool/target.
+                    # Check if achieved args differ from originally requested.
+                    failed_args = self._last_failed_args.pop(tool_key)
+                    if failed_args != args:
+                        requested_args_for_recording = failed_args
 
                 if success:
                     results.append(out)
@@ -470,6 +511,7 @@ class CADAgent:
                     name, args, success,
                     error=(error_msg if not success else None),
                     out=out,
+                    requested_args=requested_args_for_recording,
                 )
 
             # 10. Append tool results to scratchpad as tool messages. Every
@@ -482,15 +524,20 @@ class CADAgent:
                     "content": res
                 })
 
-            # 10a. Runtime geometry verification: after a tool execution, check
-            # the NEW CAD state for degenerate geometry and feed a structured
-            # warning back to the LLM so it can self-correct.
+            # 10a. Runtime geometry verification + IMMEDIATE STATE SYNC (BIP 4.3.2):
+            # After EVERY successful tool execution, refresh DesignState from the
+            # live CAD state BEFORE the next ReAct iteration. This ensures the
+            # compiled context for the next step reflects the actual CAD state.
             try:
                 new_state_json = self.adapter.get_state()
                 new_state = json.loads(new_state_json)
+                # Immediately synchronize DesignState with the live CAD state.
+                self._update_design_state(new_state_json)
             except Exception as e:
                 print(
-                    f"[Agent] Warning: Failed to get state for verification: {e}")
+                    f"[Agent] Warning: Failed to get state for verification/sync: {e}")
+                # Mark state as unavailable but preserve last known-good objects.
+                self.design_state.mark_state_unavailable()
                 new_state = []
 
             errors = check_geometry(new_state)
