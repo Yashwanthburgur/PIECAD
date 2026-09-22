@@ -627,8 +627,17 @@ class FreeCADAdapter(CADAdapter):
 
             if tool_name == "get_faces":
                 object_name = kwargs["object_name"]
-                faces = self._proxy.get_faces(str(object_name))
-                return json.dumps(faces)
+                faces_result = self._proxy.get_faces(str(object_name))
+                # Parse the new dict format with topology_version
+                try:
+                    parsed = json.loads(faces_result)
+                    if isinstance(parsed, dict) and "faces" in parsed:
+                        faces_data = parsed["faces"]
+                        topology_version = parsed.get("topology_version", 0)
+                        return faces_result
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                return faces_result
 
             if tool_name == "hole":
                 obj_id = kwargs["id"]
@@ -761,20 +770,36 @@ class FreeCADAdapter(CADAdapter):
 
             if tool_name == "get_edges":
                 object_name = kwargs["object_name"]
-                edges = self._proxy.get_edges(str(object_name))
-                return json.dumps(edges)
+                edges_result = self._proxy.get_edges(str(object_name))
+                # Parse the new dict format with topology_version
+                try:
+                    parsed = json.loads(edges_result)
+                    if isinstance(parsed, dict) and "edges" in parsed:
+                        edges_data = parsed["edges"]
+                        topology_version = parsed.get("topology_version", 0)
+                        # Record the topology version in DesignState for this object
+                        # We need access to design_state; for now return the full result
+                        # The agent will record the version from the response
+                        return edges_result
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                return edges_result
 
             if tool_name == "fillet":
                 obj_id = kwargs["id"]
                 target_id = kwargs["target_id"]
                 edge_refs = kwargs["edge_refs"]
                 radius = float(kwargs["radius"])
+                # BIP 4.3.4: Pass topology version for edge_refs validation
+                # The DesignState tracks topology versions; we retrieve it here.
+                topology_version = kwargs.get("topology_version", 0)
                 return str(
                     self._proxy.fillet(
                         str(obj_id),
                         str(target_id),
                         edge_refs,
                         radius,
+                        topology_version,
                     )
                 )
 
@@ -783,12 +808,15 @@ class FreeCADAdapter(CADAdapter):
                 target_id = kwargs["target_id"]
                 edge_refs = kwargs["edge_refs"]
                 size = float(kwargs["size"])
+                # BIP 4.3.4: Pass topology version for edge_refs validation
+                topology_version = kwargs.get("topology_version", 0)
                 return str(
                     self._proxy.chamfer(
                         str(obj_id),
                         str(target_id),
                         edge_refs,
                         size,
+                        topology_version,
                     )
                 )
 

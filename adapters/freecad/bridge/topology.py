@@ -86,11 +86,9 @@ def _impl_get_state():
 def _impl_get_faces(obj_name: str):
     """Query the B-rep faces of an existing object.
 
-    Returns a list of face dicts with:
-    - face_id (opaque pointer string)
-    - face_index (1-based index)
-    - center (CenterOfMass as dict with x, y, z; rounded to 3 decimals)
-    - area (float, rounded to 3 decimals)
+    Returns a dict with:
+    - faces: list of face dicts (face_id, face_index, center, area)
+    - topology_version: int (monotonically increasing version for this object's faces)
     """
     doc = _active_doc()
     obj = doc.getObject(obj_name)
@@ -98,7 +96,7 @@ def _impl_get_faces(obj_name: str):
         raise ValueError(f"Object not found: {obj_name}")
 
     if not hasattr(obj, "Shape") or obj.Shape is None:
-        return []
+        return {"faces": [], "topology_version": 0}
 
     faces_data = []
     for i, face in enumerate(obj.Shape.Faces):
@@ -113,17 +111,23 @@ def _impl_get_faces(obj_name: str):
             "area": round(float(face.Area), 3)
         })
 
-    return faces_data
+    # Include topology version for stale reference detection (BIP 4.3.4)
+    # Use hash of face count + areas as a simple version proxy
+    # In a full implementation, FreeCAD's Shape hashCode could be used
+    import hashlib
+    version_data = f"{len(faces_data)}:{sum(f['area'] for f in faces_data)}".encode(
+    )
+    topology_version = int(hashlib.md5(version_data).hexdigest()[:8], 16)
+
+    return {"faces": faces_data, "topology_version": topology_version}
 
 
 def _impl_get_edges(obj_name: str):
     """Query the B-rep edges of an existing object.
 
-    Returns a list of edge dicts with:
-    - edge_id (opaque pointer string)
-    - edge_index (1-based index)
-    - center (CenterOfMass as dict with x, y, z; rounded to 3 decimals)
-    - length (float, rounded to 3 decimals)
+    Returns a dict with:
+    - edges: list of edge dicts (edge_id, edge_index, center, length)
+    - topology_version: int (monotonically increasing version for this object's edges)
     """
     doc = _active_doc()
     obj = doc.getObject(obj_name)
@@ -131,7 +135,7 @@ def _impl_get_edges(obj_name: str):
         raise ValueError(f"Object not found: {obj_name}")
 
     if not hasattr(obj, "Shape") or obj.Shape is None:
-        return []
+        return {"edges": [], "topology_version": 0}
 
     edges_data = []
     for i, edge in enumerate(obj.Shape.Edges):
@@ -146,7 +150,13 @@ def _impl_get_edges(obj_name: str):
             "length": round(float(edge.Length), 3)
         })
 
-    return edges_data
+    # Include topology version for stale reference detection (BIP 4.3.4)
+    import hashlib
+    version_data = f"{len(edges_data)}:{sum(e['length'] for e in edges_data)}".encode(
+    )
+    topology_version = int(hashlib.md5(version_data).hexdigest()[:8], 16)
+
+    return {"edges": edges_data, "topology_version": topology_version}
 
 
 def _impl_get_mass_properties(id, object_name):

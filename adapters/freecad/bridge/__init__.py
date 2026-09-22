@@ -610,12 +610,12 @@ def extrude(id, sketch_id, depth, is_cut=False, is_solid=True):
     return _execute_on_main_thread("extrude", id, sketch_id, depth, is_cut, is_solid)
 
 
-def fillet(id, target_id, edge_refs, radius):
-    return _execute_on_main_thread("fillet", id, target_id, edge_refs, radius)
+def fillet(id, target_id, edge_refs, radius, topology_version=None):
+    return _execute_on_main_thread("fillet", id, target_id, edge_refs, radius, topology_version)
 
 
-def chamfer(id, target_id, edge_refs, size):
-    return _execute_on_main_thread("chamfer", id, target_id, edge_refs, size)
+def chamfer(id, target_id, edge_refs, size, topology_version=None):
+    return _execute_on_main_thread("chamfer", id, target_id, edge_refs, size, topology_version)
 
 
 def clear_document():

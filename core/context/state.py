@@ -58,6 +58,7 @@ class DesignObject:
     updated_at: float = field(default_factory=_current_ts)
 
     # -- conveniences ----------------------------------------------------- #
+
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "DesignObject":
         """Build a DesignObject from an adapter state record dict."""
@@ -170,6 +171,12 @@ class DesignState:
     state_stale: bool = False
     last_successful_sync: Optional[float] = None
 
+    # Topology version tracking (BIP 4.3.4): each object has a monotonically
+    # increasing version for its edges/faces. When a topology-altering operation
+    # modifies an object, its version increments. Stale references (emitted
+    # before the increment) are rejected at execution time.
+    topology_versions: Dict[str, int] = field(default_factory=dict)
+
     # ---- construction / updates ---------------------------------------- #
 
     def update_from_cad_state(self, state_json: str) -> "DesignState":
@@ -225,6 +232,55 @@ class DesignState:
             self.state_stale = True
         return self
 
+    # ---- Topology version management (BIP 4.3.4) ----------------------- #
+
+    def get_topology_version(self, object_id: str) -> int:
+        """Return the current topology version for an object.
+
+        Returns 0 if the object has no tracked version (first time or unknown).
+        """
+        return self.topology_versions.get(object_id, 0)
+
+    def increment_topology_version(self, object_id: str) -> int:
+        """Increment and return the new topology version for an object.
+
+        Called after a topology-altering operation (fillet, chamfer, boolean, etc.)
+        on the target object.
+        """
+        current = self.topology_versions.get(object_id, 0)
+        new_version = current + 1
+        self.topology_versions[object_id] = new_version
+        return new_version
+
+    def record_topology_reference(self, object_id: str, ref_type: str,
+                                  version: int) -> None:
+        """Record that references (edge_refs or face_refs) were emitted at a specific version.
+
+        Called by the bridge when get_edges/get_faces returns references.
+        """
+        key = f"{object_id}:{ref_type}_version"
+        self.derived_facts[key] = version
+
+    def is_reference_stale(self, object_id: str, ref_type: str,
+                           ref_version: int) -> bool:
+        """Check if a reference is stale.
+
+        Args:
+            object_id: The target object ID (e.g., "box1")
+            ref_type: "edge" or "face"
+            ref_version: The topology version at which the reference was emitted
+
+        Returns:
+            True if the reference is stale (object's current version > ref_version)
+        """
+        current_version = self.get_topology_version(object_id)
+        return current_version > ref_version
+
+    def get_recorded_reference_version(self, object_id: str, ref_type: str) -> int:
+        """Get the version at which the last get_edges/get_faces was called for this object."""
+        key = f"{object_id}:{ref_type}_version"
+        return self.derived_facts.get(key, 0)
+
     def update_from_tool_result(
         self,
         tool: str,
@@ -258,6 +314,13 @@ class DesignState:
             self._ensure_object_present(target_id)
             self.current_task = self.current_task or self._hint_task(
                 tool, target_id)
+
+        # BIP 4.3.4: Increment topology version for topology-altering operations
+        topology_altering_tools = {"fillet", "chamfer", "boolean", "hole",
+                                   "shell", "edit_feature", "pattern_linear",
+                                   "pattern_circular", "delete_feature"}
+        if success and target_id and tool in topology_altering_tools:
+            self.increment_topology_version(target_id)
 
         self._derive_facts()
         return self
@@ -325,6 +388,7 @@ class DesignState:
             "state_available": self.state_available,
             "state_stale": self.state_stale,
             "last_successful_sync": self.last_successful_sync,
+            "topology_versions": dict(self.topology_versions),
         }
 
     def clear(self) -> "DesignState":
@@ -336,6 +400,10 @@ class DesignState:
         self.current_task = None
         self.current_intent = None
         self.derived_facts = {}
+        self.state_available = True
+        self.state_stale = False
+        self.last_successful_sync = None
+        self.topology_versions.clear()
         return self
 
     # ---- selective view ------------------------------------------------- #

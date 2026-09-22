@@ -52,9 +52,11 @@ def _impl_edit_feature(id: str, target_id: str, parameters: dict):
             try:
                 setattr(obj, key, float(value))
             except Exception as e:
-                raise RuntimeError(f"Failed to set parameter '{key}' on {target_id}: {e}")
+                raise RuntimeError(
+                    f"Failed to set parameter '{key}' on {target_id}: {e}")
         else:
-            raise RuntimeError(f"Object '{target_id}' does not have a parameter named '{key}'.")
+            raise RuntimeError(
+                f"Object '{target_id}' does not have a parameter named '{key}'.")
 
     if placement_changed:
         # Explicitly write the vector back: FreeCAD may hand out value-copies
@@ -66,7 +68,8 @@ def _impl_edit_feature(id: str, target_id: str, parameters: dict):
     return _sync(doc)
 
 
-def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float):
+def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float,
+                 topology_version: int = None):
     """Apply a fillet to specific edges of an object.
 
     Args:
@@ -74,6 +77,7 @@ def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float):
         target_id: Name of the target object to fillet
         edge_refs: List of opaque pointer strings, format "ObjectName_edge_N" (1-based index)
         radius: Fillet radius (must be > 0)
+        topology_version: Optional topology version for stale reference detection (BIP 4.3.4)
     """
     if radius <= 0:
         raise ValueError(f"Fillet radius must be > 0, got {radius}")
@@ -88,6 +92,22 @@ def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float):
 
     if not hasattr(target, "Shape") or target.Shape is None:
         raise ValueError(f"Target object has no Shape: {target_id}")
+
+    # BIP 4.3.4: Validate topology version if provided
+    if topology_version is not None:
+        import hashlib
+        # Compute current topology version from edge count + lengths
+        edges_data = []
+        for i, edge in enumerate(target.Shape.Edges):
+            edges_data.append({"length": round(float(edge.Length), 3)})
+        version_data = f"{len(edges_data)}:{sum(e['length'] for e in edges_data)}".encode(
+        )
+        current_version = int(hashlib.md5(version_data).hexdigest()[:8], 16)
+        if current_version != topology_version:
+            raise RuntimeError(
+                f"Topology references for '{target_id}' are stale (expected version {topology_version}, "
+                f"current version {current_version}). You must call get_edges again to get updated references."
+            )
 
     # Parse all edge_refs and build the FreeCAD edges list
     freecad_edges = []
@@ -132,7 +152,8 @@ def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float):
     return f"Successfully created fillet '{id}' on {len(edge_refs)} edge(s) of '{target_id}' with radius {radius}."
 
 
-def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float):
+def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float,
+                  topology_version: int = None):
     """Apply a chamfer to specific edges of an object.
 
     Args:
@@ -140,6 +161,7 @@ def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float):
         target_id: Name of the target object to chamfer
         edge_refs: List of opaque pointer strings, format "ObjectName_edge_N" (1-based index)
         size: Chamfer distance (must be > 0)
+        topology_version: Optional topology version for stale reference detection (BIP 4.3.4)
     """
     if size <= 0:
         raise ValueError(f"Chamfer size must be > 0, got {size}")
@@ -154,6 +176,22 @@ def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float):
 
     if not hasattr(target, "Shape") or target.Shape is None:
         raise ValueError(f"Target object has no Shape: {target_id}")
+
+    # BIP 4.3.4: Validate topology version if provided
+    if topology_version is not None:
+        import hashlib
+        # Compute current topology version from edge count + lengths
+        edges_data = []
+        for i, edge in enumerate(target.Shape.Edges):
+            edges_data.append({"length": round(float(edge.Length), 3)})
+        version_data = f"{len(edges_data)}:{sum(e['length'] for e in edges_data)}".encode(
+        )
+        current_version = int(hashlib.md5(version_data).hexdigest()[:8], 16)
+        if current_version != topology_version:
+            raise RuntimeError(
+                f"Topology references for '{target_id}' are stale (expected version {topology_version}, "
+                f"current version {current_version}). You must call get_edges again to get updated references."
+            )
 
     # Parse all edge_refs and build the FreeCAD edges list
     freecad_edges = []
