@@ -171,11 +171,11 @@ class DesignState:
     state_stale: bool = False
     last_successful_sync: Optional[float] = None
 
-    # Topology version tracking (BIP 4.3.4): each object has a monotonically
-    # increasing version for its edges/faces. When a topology-altering operation
-    # modifies an object, its version increments. Stale references (emitted
-    # before the increment) are rejected at execution time.
-    topology_versions: Dict[str, int] = field(default_factory=dict)
+    # Topology version tracking (BIP 4.3.4): each object has a version for its
+    # edges/faces. When a topology-altering operation modifies an object, its
+    # version changes. Stale references (emitted before the change) are rejected
+    # at execution time. Versions are string hashes (XML-RPC safe).
+    topology_versions: Dict[str, str] = field(default_factory=dict)
 
     # ---- construction / updates ---------------------------------------- #
 
@@ -234,26 +234,31 @@ class DesignState:
 
     # ---- Topology version management (BIP 4.3.4) ----------------------- #
 
-    def get_topology_version(self, object_id: str) -> int:
+    def get_topology_version(self, object_id: str) -> str:
         """Return the current topology version for an object.
 
-        Returns 0 if the object has no tracked version (first time or unknown).
+        Returns "0" if the object has no tracked version (first time or unknown).
+        Versions are string hashes (XML-RPC safe).
         """
-        return self.topology_versions.get(object_id, 0)
+        return self.topology_versions.get(object_id, "0")
 
-    def increment_topology_version(self, object_id: str) -> int:
-        """Increment and return the new topology version for an object.
+    def increment_topology_version(self, object_id: str) -> str:
+        """Generate a new topology version for an object.
 
         Called after a topology-altering operation (fillet, chamfer, boolean, etc.)
-        on the target object.
+        on the target object. Since versions are now deterministic string hashes
+        computed by the bridge, this method generates a fresh version by using
+        a timestamp-based hash to ensure uniqueness.
         """
-        current = self.topology_versions.get(object_id, 0)
-        new_version = current + 1
+        import hashlib
+        import time
+        version_data = f"{object_id}:{time.time()}".encode()
+        new_version = hashlib.md5(version_data).hexdigest()[:16]
         self.topology_versions[object_id] = new_version
         return new_version
 
     def record_topology_reference(self, object_id: str, ref_type: str,
-                                  version: int) -> None:
+                                  version: str) -> None:
         """Record that references (edge_refs or face_refs) were emitted at a specific version.
 
         Called by the bridge when get_edges/get_faces returns references.
@@ -262,24 +267,24 @@ class DesignState:
         self.derived_facts[key] = version
 
     def is_reference_stale(self, object_id: str, ref_type: str,
-                           ref_version: int) -> bool:
+                           ref_version: str) -> bool:
         """Check if a reference is stale.
 
         Args:
             object_id: The target object ID (e.g., "box1")
             ref_type: "edge" or "face"
-            ref_version: The topology version at which the reference was emitted
+            ref_version: The topology version (string hash) at which the reference was emitted
 
         Returns:
-            True if the reference is stale (object's current version > ref_version)
+            True if the reference is stale (object's current version != ref_version)
         """
         current_version = self.get_topology_version(object_id)
-        return current_version > ref_version
+        return current_version != ref_version
 
-    def get_recorded_reference_version(self, object_id: str, ref_type: str) -> int:
+    def get_recorded_reference_version(self, object_id: str, ref_type: str) -> str:
         """Get the version at which the last get_edges/get_faces was called for this object."""
         key = f"{object_id}:{ref_type}_version"
-        return self.derived_facts.get(key, 0)
+        return self.derived_facts.get(key, "0")
 
     def update_from_tool_result(
         self,

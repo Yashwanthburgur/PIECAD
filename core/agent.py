@@ -517,11 +517,17 @@ class CADAgent:
             # 10. Append tool results to scratchpad as tool messages. Every
             #     tool_call gets exactly one result entry (success, structured
             #     error, or malformed-args error), so the lists stay aligned.
+            # OpenAI API requires tool message content to be a string.
             for tc, res in zip(response.tool_calls, results):
+                # Ensure content is always a string (JSON-serialize if needed)
+                if not isinstance(res, str):
+                    content = json.dumps(res, default=str)
+                else:
+                    content = res
                 scratchpad.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": res
+                    "content": content
                 })
 
             # 10a. Runtime geometry verification + IMMEDIATE STATE SYNC (BIP 4.3.2):

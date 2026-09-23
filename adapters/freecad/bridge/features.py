@@ -69,7 +69,7 @@ def _impl_edit_feature(id: str, target_id: str, parameters: dict):
 
 
 def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float,
-                 topology_version: int = None):
+                 topology_version: str | None = None):
     """Apply a fillet to specific edges of an object.
 
     Args:
@@ -102,7 +102,7 @@ def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float,
             edges_data.append({"length": round(float(edge.Length), 3)})
         version_data = f"{len(edges_data)}:{sum(e['length'] for e in edges_data)}".encode(
         )
-        current_version = int(hashlib.md5(version_data).hexdigest()[:8], 16)
+        current_version = hashlib.md5(version_data).hexdigest()[:16]
         if current_version != topology_version:
             raise RuntimeError(
                 f"Topology references for '{target_id}' are stale (expected version {topology_version}, "
@@ -153,7 +153,7 @@ def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float,
 
 
 def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float,
-                  topology_version: int = None):
+                  topology_version: str | None = None):
     """Apply a chamfer to specific edges of an object.
 
     Args:
@@ -186,7 +186,7 @@ def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float,
             edges_data.append({"length": round(float(edge.Length), 3)})
         version_data = f"{len(edges_data)}:{sum(e['length'] for e in edges_data)}".encode(
         )
-        current_version = int(hashlib.md5(version_data).hexdigest()[:8], 16)
+        current_version = hashlib.md5(version_data).hexdigest()[:16]
         if current_version != topology_version:
             raise RuntimeError(
                 f"Topology references for '{target_id}' are stale (expected version {topology_version}, "

@@ -1,7 +1,11 @@
 """BIP 4.3.4 — Topology Safety & Stale References regression tests.
 
-Verifies that topology-altering operations increment topology versions
+Verifies that topology-altering operations advance topology versions
 and stale edge_refs/face_refs are rejected at execution time.
+
+NOTE (BIP 4.3.5): topology versions are now deterministic STRING hashes
+(XML-RPC safe) rather than integers, so assertions compare string versions
+and check that a version *changed* rather than that it incremented by 1.
 """
 
 import sys
@@ -32,55 +36,58 @@ def _box(oid="box1", **kw):
 # --------------------------------------------------------------------------- #
 
 def test_topology_version_starts_at_zero():
-    """New objects start with topology version 0."""
+    """New objects start with topology version "0"."""
     st = DesignState()
-    assert st.get_topology_version("box1") == 0
+    assert st.get_topology_version("box1") == "0"
 
 
 def test_topology_version_increments():
-    """increment_topology_version increases the version monotonically."""
+    """increment_topology_version produces a new (string) version each call."""
     st = DesignState()
     v1 = st.increment_topology_version("box1")
     v2 = st.increment_topology_version("box1")
-    assert v1 == 1
-    assert v2 == 2
+    assert isinstance(v1, str)
+    assert isinstance(v2, str)
+    assert v1 != v2
 
 
 def test_is_reference_stale():
-    """is_reference_stale returns True when current > reference version."""
+    """is_reference_stale returns True when the current version differs."""
     st = DesignState()
-    st.increment_topology_version("box1")  # version = 1
-    assert st.is_reference_stale("box1", "edge", 0) is True
-    assert st.is_reference_stale("box1", "edge", 1) is False
-    assert st.is_reference_stale("box1", "face", 0) is True
+    current = st.increment_topology_version("box1")  # new version
+    assert st.is_reference_stale("box1", "edge", "0") is True
+    assert st.is_reference_stale("box1", "edge", current) is False
+    assert st.is_reference_stale("box1", "face", "0") is True
 
 
 def test_record_and_get_reference_version():
     """record_topology_reference stores and retrieves the version."""
     st = DesignState()
-    st.record_topology_reference("box1", "edge", 5)
-    assert st.get_recorded_reference_version("box1", "edge") == 5
+    st.record_topology_reference("box1", "edge", "5")
+    assert st.get_recorded_reference_version("box1", "edge") == "5"
 
 
 def test_update_from_tool_result_increments_topology():
-    """Topology-altering tools increment topology version on success."""
+    """Topology-altering tools advance topology version on success."""
     st = DesignState()
     st.update_from_cad_state(json.dumps([_box()]))
-    assert st.get_topology_version("box1") == 0
+    assert st.get_topology_version("box1") == "0"
 
     # Simulate a fillet operation
     st.update_from_tool_result(
         tool="fillet", result="ok", target_id="box1",
         args={"radius": 5.0, "target_id": "box1"}, success=True
     )
-    assert st.get_topology_version("box1") == 1
+    after_fillet = st.get_topology_version("box1")
+    assert after_fillet != "0"
 
     # Another topology operation
     st.update_from_tool_result(
         tool="chamfer", result="ok", target_id="box1",
         args={"size": 2.0, "target_id": "box1"}, success=True
     )
-    assert st.get_topology_version("box1") == 2
+    after_chamfer = st.get_topology_version("box1")
+    assert after_chamfer != after_fillet
 
     # Non-topology tool should NOT increment
     st.update_from_tool_result(
@@ -88,23 +95,25 @@ def test_update_from_tool_result_increments_topology():
         args={"Length": 120.0}, success=True
     )
     # edit_feature IS topology-altering
-    assert st.get_topology_version("box1") == 3
+    after_edit = st.get_topology_version("box1")
+    assert after_edit != after_chamfer
 
     # get_edges should NOT increment
     st.update_from_tool_result(
         tool="get_edges", result="ok", target_id="box1",
         args={"object_name": "box1"}, success=True
     )
-    assert st.get_topology_version("box1") == 3
+    assert st.get_topology_version("box1") == after_edit
 
 
 def test_snapshot_includes_topology_versions():
     """DesignState.snapshot() includes topology_versions."""
     st = DesignState()
-    st.increment_topology_version("box1")
+    version = st.increment_topology_version("box1")
     snap = st.snapshot()
     assert "topology_versions" in snap
-    assert snap["topology_versions"]["box1"] == 1
+    assert snap["topology_versions"]["box1"] == version
+    assert isinstance(snap["topology_versions"]["box1"], str)
 
 
 def test_clear_resets_topology_versions():
@@ -112,7 +121,7 @@ def test_clear_resets_topology_versions():
     st = DesignState()
     st.increment_topology_version("box1")
     st.clear()
-    assert st.get_topology_version("box1") == 0
+    assert st.get_topology_version("box1") == "0"
 
 
 # --------------------------------------------------------------------------- #
@@ -156,7 +165,7 @@ class StubAdapter(CADAdapter):
         self.state_sequence = state_sequence or []
         self.state_index = 0
         self.calls = []
-        self.topology_version = 1  # Simple mock version
+        self.topology_version = "1"  # Simple mock version (string, BIP 4.3.5)
 
     def get_tools(self):
         return [{"type": "function", "function": {
@@ -176,8 +185,11 @@ class StubAdapter(CADAdapter):
                                  "visible": True, "parents": [], "children": [],
                                  "properties": kwargs})
         if tool_name in ("fillet", "chamfer"):
-            # Increment mock topology version for the target
-            self.topology_version += 1
+            # Advance mock topology version for the target (string hash)
+            import hashlib
+            import time
+            self.topology_version = hashlib.md5(
+                f"{tool_name}:{time.time()}".encode()).hexdigest()[:16]
         return "ok" if len(rest) == 0 else rest[0]
 
     def get_state(self):
@@ -195,7 +207,7 @@ def test_fresh_reference_succeeds():
         tool_names=["box", "fillet", "get_edges", "get_state"],
         behavior={
             "fillet": ("ok", "fillet applied"),
-            "get_edges": ("ok", '{"edges": [{"edge_id": "box1_edge_1"}], "topology_version": 1}'),
+            "get_edges": ("ok", '{"edges": [{"edge_id": "box1_edge_1"}], "topology_version": "1"}'),
         },
         state_sequence=[
             [{"id": "box1", "type": "Part::Box", "visible": True,
@@ -210,7 +222,7 @@ def test_fresh_reference_succeeds():
         (None, [("box", {"Length": 100, "Width": 50, "Height": 20})]),
         (None, [("get_edges", {"object_name": "box1"})]),
         (None, [("fillet", {"radius": 5.0, "target_id": "box1",
-         "edge_refs": ["box1_edge_1"], "topology_version": 1})]),
+         "edge_refs": ["box1_edge_1"], "topology_version": "1"})]),
         ("Fillet applied.", None),
     ])
     agent = CADAgent(adapter=adapter, provider=prov)
@@ -230,19 +242,19 @@ def test_stale_reference_rejected():
     st = DesignState()
     st.update_from_cad_state(json.dumps([_box()]))
 
-    # Record a reference at version 0
-    st.record_topology_reference("box1", "edge", 0)
+    # Record a reference at version "0"
+    st.record_topology_reference("box1", "edge", "0")
 
     # Simulate a topology change (fillet)
-    st.increment_topology_version("box1")  # version = 1
+    current = st.increment_topology_version("box1")  # new version
 
     # Check if the recorded reference is now stale
     recorded_version = st.get_recorded_reference_version("box1", "edge")
     is_stale = st.is_reference_stale("box1", "edge", recorded_version)
     assert is_stale is True, "Reference should be stale after topology change"
 
-    # Fresh reference at version 1
-    st.record_topology_reference("box1", "edge", 1)
+    # Fresh reference at the current version
+    st.record_topology_reference("box1", "edge", current)
     recorded_version = st.get_recorded_reference_version("box1", "edge")
     is_stale = st.is_reference_stale("box1", "edge", recorded_version)
     assert is_stale is False, "Fresh reference should not be stale"
@@ -251,29 +263,30 @@ def test_stale_reference_rejected():
 
 
 def test_multiple_topology_operations():
-    """Multiple topology operations correctly increment version each time."""
+    """Multiple topology operations advance version each time."""
     st = DesignState()
     st.update_from_cad_state(json.dumps([_box()]))
 
     topology_tools = ["fillet", "chamfer", "boolean", "hole", "shell",
                       "edit_feature", "pattern_linear", "pattern_circular", "delete_feature"]
 
-    for i, tool in enumerate(topology_tools):
+    for tool in topology_tools:
+        before = st.get_topology_version("box1")
         st.update_from_tool_result(
             tool=tool, result="ok", target_id="box1",
             args={"target_id": "box1"}, success=True
         )
-        assert st.get_topology_version(
-            "box1") == i + 1, f"Tool {tool} should increment version"
+        after = st.get_topology_version("box1")
+        assert after != before, f"Tool {tool} should advance the version"
 
-    print("✓ Multiple topology operations increment version correctly")
+    print("✓ Multiple topology operations advance version correctly")
 
 
 def test_non_topology_tool_no_increment():
-    """Non-topology tools do not increment topology version."""
+    """Non-topology tools do not advance topology version."""
     st = DesignState()
     st.update_from_cad_state(json.dumps([_box()]))
-    st.increment_topology_version("box1")  # version = 1
+    version = st.increment_topology_version("box1")
 
     non_topology_tools = ["get_edges", "get_faces",
                           "get_state", "get_mass_properties", "get_bom", "export"]
@@ -284,9 +297,9 @@ def test_non_topology_tool_no_increment():
             args={}, success=True
         )
         assert st.get_topology_version(
-            "box1") == 1, f"Tool {tool} should NOT increment version"
+            "box1") == version, f"Tool {tool} should NOT advance the version"
 
-    print("✓ Non-topology tools do not increment version")
+    print("✓ Non-topology tools do not advance version")
 
 
 if __name__ == "__main__":

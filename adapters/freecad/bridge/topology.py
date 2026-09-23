@@ -88,7 +88,7 @@ def _impl_get_faces(obj_name: str):
 
     Returns a dict with:
     - faces: list of face dicts (face_id, face_index, center, area)
-    - topology_version: int (monotonically increasing version for this object's faces)
+    - topology_version: str (deterministic hex digest for this object's faces)
     """
     doc = _active_doc()
     obj = doc.getObject(obj_name)
@@ -96,7 +96,7 @@ def _impl_get_faces(obj_name: str):
         raise ValueError(f"Object not found: {obj_name}")
 
     if not hasattr(obj, "Shape") or obj.Shape is None:
-        return {"faces": [], "topology_version": 0}
+        return {"faces": [], "topology_version": "0"}
 
     faces_data = []
     for i, face in enumerate(obj.Shape.Faces):
@@ -117,7 +117,7 @@ def _impl_get_faces(obj_name: str):
     import hashlib
     version_data = f"{len(faces_data)}:{sum(f['area'] for f in faces_data)}".encode(
     )
-    topology_version = int(hashlib.md5(version_data).hexdigest()[:8], 16)
+    topology_version = hashlib.md5(version_data).hexdigest()[:16]
 
     return {"faces": faces_data, "topology_version": topology_version}
 
@@ -127,7 +127,7 @@ def _impl_get_edges(obj_name: str):
 
     Returns a dict with:
     - edges: list of edge dicts (edge_id, edge_index, center, length)
-    - topology_version: int (monotonically increasing version for this object's edges)
+    - topology_version: str (deterministic hex digest for this object's edges)
     """
     doc = _active_doc()
     obj = doc.getObject(obj_name)
@@ -135,7 +135,7 @@ def _impl_get_edges(obj_name: str):
         raise ValueError(f"Object not found: {obj_name}")
 
     if not hasattr(obj, "Shape") or obj.Shape is None:
-        return {"edges": [], "topology_version": 0}
+        return {"edges": [], "topology_version": "0"}
 
     edges_data = []
     for i, edge in enumerate(obj.Shape.Edges):
@@ -154,7 +154,7 @@ def _impl_get_edges(obj_name: str):
     import hashlib
     version_data = f"{len(edges_data)}:{sum(e['length'] for e in edges_data)}".encode(
     )
-    topology_version = int(hashlib.md5(version_data).hexdigest()[:8], 16)
+    topology_version = hashlib.md5(version_data).hexdigest()[:16]
 
     return {"edges": edges_data, "topology_version": topology_version}
 
