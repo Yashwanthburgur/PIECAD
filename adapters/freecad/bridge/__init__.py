@@ -238,9 +238,19 @@ def execute(code: str):
 
 
 _WORK_QUEUE: "queue.Queue[tuple]" = queue.Queue()
-_RESULTS: "dict[str, tuple[str, str]]" = {}
+_RESULTS: "dict[str, tuple]" = {}
 _RESULTS_EVENTS: "dict[str, threading.Event]" = {}
 _RESULTS_LOCK = threading.Lock()
+
+# BIP 5.1: Tool operations that mutate CAD state. Each is executed atomically:
+# the bridge wraps it in a FreeCAD transaction and aborts it if ANY step fails,
+# so a failed operation cannot leave partial/orphan geometry behind.
+_ATOMIC_OPERATIONS = {
+    "create_box", "create_cylinder", "boolean", "delete_object", "translate",
+    "hole", "edit_object", "edit_feature", "sketch", "extrude", "fillet",
+    "chamfer", "pattern_linear", "pattern_circular", "shell", "mate",
+    "export_model",
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -474,6 +484,52 @@ _IMPLEMENTATIONS = {
 # --------------------------------------------------------------------------- #
 
 
+def _run_operation(op_name, args, kwargs):
+    """Invoke an implementation. Returns (status, payload) without raising.
+
+    BIP 5.1: mutating operations run inside a FreeCAD transaction so that any
+    failure (including a failure discovered late in a compound operation, e.g.
+    a failed recompute after objects were already added) aborts the whole
+    operation instead of leaving partial/orphan geometry behind.
+    """
+    atomic = isinstance(op_name, str) and op_name in _ATOMIC_OPERATIONS
+
+    # Resolve the callable first so an unknown op cannot open a stray transaction.
+    impl = op_name if callable(op_name) else _IMPLEMENTATIONS.get(op_name)
+    if impl is None:
+        return "error", f"Unknown operation: {op_name}"
+
+    if not atomic:
+        try:
+            return "ok", impl(*args, **kwargs)
+        except Exception as e:
+            return "error", str(e)
+
+    # Reuse the existing FreeCAD document transaction mechanism for rollback.
+    doc = App.ActiveDocument
+    if doc is None:
+        # Nothing to roll back against (e.g. a create that builds the doc);
+        # fall back to the non-transactional path.
+        try:
+            return "ok", impl(*args, **kwargs)
+        except Exception as e:
+            return "error", str(e)
+
+    doc.openTransaction(str(op_name))
+    try:
+        payload = impl(*args, **kwargs)
+        doc.commitTransaction()
+        return "ok", payload
+    except Exception as e:
+        # Abort the entire operation: undo every object/state change made by
+        # this call, then surface the ORIGINAL structured error unchanged.
+        try:
+            doc.abortTransaction()
+        except Exception:
+            pass
+        return "error", str(e)
+
+
 def _process_queue():
     """Drain pending operations. Runs on the FreeCAD main thread via QTimer."""
     while True:
@@ -482,24 +538,7 @@ def _process_queue():
         except queue.Empty:
             break
 
-        if isinstance(op_name, str):
-            # String op-name form: look up the implementation in the registry.
-            impl = _IMPLEMENTATIONS.get(op_name)
-            if impl is None:
-                status, payload = "error", f"Unknown operation: {op_name}"
-            else:
-                try:
-                    status, payload = "ok", impl(
-                        *args, **kwargs)
-                except Exception as e:
-                    status, payload = "error", str(e)
-        else:
-            # Callable form: op_name is already the implementation function.
-            try:
-                status, payload = "ok", op_name(
-                    *args, **kwargs)
-            except Exception as e:
-                status, payload = "error", str(e)
+        status, payload = _run_operation(op_name, args, kwargs)
 
         with _RESULTS_LOCK:
             _RESULTS[req_id] = (status, payload)
