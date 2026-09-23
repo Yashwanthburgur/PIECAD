@@ -320,6 +320,22 @@ class DesignState:
             self.current_task = self.current_task or self._hint_task(
                 tool, target_id)
 
+        # BIP 4.3.5: get_edges/get_faces return the bridge's authoritative
+        # topology fingerprint. Record that EXACT returned version in
+        # DesignState for the target object (do NOT fabricate a different one)
+        # so that subsequent fillet/chamfer reference validation compares
+        # against the bridge value.
+        if success and tool in ("get_edges", "get_faces") and target_id is not None:
+            try:
+                parsed = json.loads(result) if isinstance(result, str) else result
+            except (json.JSONDecodeError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict) and "topology_version" in parsed:
+                version = str(parsed["topology_version"])
+                self.topology_versions[target_id] = version
+                ref_type = "edge" if tool == "get_edges" else "face"
+                self.record_topology_reference(target_id, ref_type, version)
+
         # BIP 4.3.4: Increment topology version for topology-altering operations
         topology_altering_tools = {"fillet", "chamfer", "boolean", "hole",
                                    "shell", "edit_feature", "pattern_linear",
