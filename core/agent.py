@@ -416,6 +416,16 @@ class CADAgent:
                 target = args.get("target_id") or args.get("target") or \
                     args.get("object") or args.get("object_name")
 
+                # BIP 4.3.7: Auto-inject the authoritative topology version for
+                # fillet/chamfer so edge references are validated against the
+                # version recorded in DesignState for the target object. The
+                # version is stored at the object level, so we look it up
+                # directly by target_id (no reference-type key lookup).
+                if name in ("fillet", "chamfer") and args.get("target_id") is not None:
+                    fetched_version = self.design_state.get_topology_version(
+                        args["target_id"])
+                    args["topology_version"] = fetched_version
+
                 print(
                     f"[Execution] Step {step+1}: Tool '{name}' with args: {args}")
 
@@ -513,6 +523,37 @@ class CADAgent:
                     out=out,
                     requested_args=requested_args_for_recording,
                 )
+
+                # BIP 4.3.9: After a successful topology-changing operation,
+                # refresh the target object's authoritative topology fingerprint
+                # so the next fillet/chamfer is not unnecessarily rejected as
+                # stale. We reuse the EXISTING bridge topology query path
+                # (get_edges) and the EXISTING state-sync path
+                # (update_from_tool_result) — no new fingerprint is invented.
+                topology_altering_tools = {
+                    "fillet", "chamfer", "boolean", "hole",
+                    "shell", "edit_feature", "pattern_linear",
+                    "pattern_circular", "delete_feature",
+                }
+                refresh_target = args.get(
+                    "target_id") or args.get("object_name")
+                if success and name in topology_altering_tools and refresh_target:
+                    try:
+                        edges_json = self.adapter.execute_command(
+                            "get_edges", object_name=refresh_target)
+                        self.design_state.update_from_tool_result(
+                            tool="get_edges",
+                            result=edges_json,
+                            target_id=refresh_target,
+                            args={"object_name": refresh_target},
+                            success=True,
+                        )
+                    except Exception as e:
+                        # Refresh is best-effort: a failure here must NOT abort
+                        # the turn or fabricate a topology fingerprint.
+                        print(
+                            f"[Agent] Warning: post-operation topology refresh "
+                            f"failed for '{refresh_target}': {e}")
 
             # 10. Append tool results to scratchpad as tool messages. Every
             #     tool_call gets exactly one result entry (success, structured

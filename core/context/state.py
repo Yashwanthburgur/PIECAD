@@ -243,19 +243,23 @@ class DesignState:
         return self.topology_versions.get(object_id, "0")
 
     def increment_topology_version(self, object_id: str) -> str:
-        """Generate a new topology version for an object.
+        """Invalidate the recorded topology fingerprint for an object.
 
         Called after a topology-altering operation (fillet, chamfer, boolean, etc.)
-        on the target object. Since versions are now deterministic string hashes
-        computed by the bridge, this method generates a fresh version by using
-        a timestamp-based hash to ensure uniqueness.
+        on the target object. The authoritative topology fingerprint is the
+        deterministic hash computed by the CAD bridge (see get_edges/get_faces),
+        so DesignState must NOT invent a local version that could disagree with it.
+
+        We therefore drop the previously-recorded fingerprint. This means:
+          - get_topology_version() returns the "0" unknown sentinel until the
+            next get_edges/get_faces records the bridge's authoritative value, and
+          - is_reference_stale() correctly reports any previously-emitted
+            references as stale, forcing a bridge refresh before further use.
+
+        Returns the current (post-invalidation) version for convenience.
         """
-        import hashlib
-        import time
-        version_data = f"{object_id}:{time.time()}".encode()
-        new_version = hashlib.md5(version_data).hexdigest()[:16]
-        self.topology_versions[object_id] = new_version
-        return new_version
+        self.topology_versions.pop(object_id, None)
+        return self.get_topology_version(object_id)
 
     def record_topology_reference(self, object_id: str, ref_type: str,
                                   version: str) -> None:
@@ -327,7 +331,8 @@ class DesignState:
         # against the bridge value.
         if success and tool in ("get_edges", "get_faces") and target_id is not None:
             try:
-                parsed = json.loads(result) if isinstance(result, str) else result
+                parsed = json.loads(result) if isinstance(
+                    result, str) else result
             except (json.JSONDecodeError, TypeError):
                 parsed = None
             if isinstance(parsed, dict) and "topology_version" in parsed:
