@@ -29,6 +29,21 @@ def _impl_pattern_linear(id: str, target_id: str, direction: dict, distance: flo
     if not target_obj:
         raise RuntimeError(f"Target object {target_id} not found")
 
+    # Idempotency guard (BIP 5.3): a lost-response retry re-invokes this op
+    # after the first attempt already created the pattern. The result object
+    # is keyed by the requested `id`, so if it already exists, converge on the
+    # existing pattern instead of creating a duplicate member set (id001, ...).
+    existing_pattern = doc.getObject(id)
+    if existing_pattern is not None:
+        try:
+            target_obj.ViewObject.Visibility = False
+        except Exception:
+            pass
+        _finish(existing_pattern)
+        return (f"Linear pattern '{id}' of '{target_id}' already existed; "
+                f"reusing it (count {c_count}, direction {direction}, "
+                f"distance {c_distance}).")
+
     # Ensure direction components are floats
     dir_vec = App.Vector(
         float(direction.get("x", 0)),
@@ -82,6 +97,20 @@ def _impl_pattern_circular(id: str, target_id: str, axis_origin: dict, axis_dire
     target_obj = doc.getObject(target_id)
     if not target_obj:
         raise RuntimeError(f"Target object {target_id} not found")
+
+    # Idempotency guard (BIP 5.4): a lost-response retry re-invokes this op
+    # after the first attempt already created the pattern. The result object
+    # is keyed by the requested `id`, so if it already exists, converge on the
+    # existing pattern instead of creating a duplicate member set (id001, ...).
+    existing_pattern = doc.getObject(id)
+    if existing_pattern is not None:
+        try:
+            target_obj.ViewObject.Visibility = False
+        except Exception:
+            pass
+        _finish(existing_pattern)
+        return (f"Circular pattern '{id}' of '{target_id}' already existed; "
+                f"reusing it (count {c_count}, angle {c_angle}°).")
 
     # Ensure axis_origin and axis_direction components are floats
     center = App.Vector(
