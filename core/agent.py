@@ -416,15 +416,25 @@ class CADAgent:
                 target = args.get("target_id") or args.get("target") or \
                     args.get("object") or args.get("object_name")
 
-                # BIP 4.3.7: Auto-inject the authoritative topology version for
-                # fillet/chamfer so edge references are validated against the
-                # version recorded in DesignState for the target object. The
-                # version is stored at the object level, so we look it up
-                # directly by target_id (no reference-type key lookup).
+                # BIP 4.3.7 / 5.5: Auto-inject the topology version AT WHICH the
+                # edge references were emitted (not the object's current version).
+                # The bridge compares this against the object's live topology; if
+                # the object changed since the references were captured, the
+                # comparison fails and the stale reference is rejected.
+                #
+                # BIP 5.5: using the recorded REFERENCE version (rather than the
+                # object's current version) is what makes a reused OLD edge_ref
+                # actually get rejected instead of being validated against the
+                # fresher object topology. If no reference version is recorded
+                # (the "0"/empty unknown sentinel), inject nothing so no stale
+                # reference is implicitly trusted.
                 if name in ("fillet", "chamfer") and args.get("target_id") is not None:
-                    fetched_version = self.design_state.get_topology_version(
-                        args["target_id"])
-                    args["topology_version"] = fetched_version
+                    ref_version = self.design_state.get_recorded_reference_version(
+                        args["target_id"], "edge")
+                    if ref_version not in (None, "", "0"):
+                        args["topology_version"] = ref_version
+                    else:
+                        args.pop("topology_version", None)
 
                 print(
                     f"[Execution] Step {step+1}: Tool '{name}' with args: {args}")
@@ -539,6 +549,16 @@ class CADAgent:
                     "target_id") or args.get("object_name")
                 if success and name in topology_altering_tools and refresh_target:
                     try:
+                        # BIP 5.5: capture the version at which the existing edge
+                        # references were emitted BEFORE the refresh. The refresh
+                        # must advance the object-level fingerprint (so the NEXT
+                        # reference capture is current) but must NOT make the
+                        # already-emitted references valid - otherwise a reused
+                        # old edge_ref would silently pass stale-validation merely
+                        # because the object-level version was refreshed.
+                        emitted_ref_version = \
+                            self.design_state.get_recorded_reference_version(
+                                refresh_target, "edge")
                         edges_json = self.adapter.execute_command(
                             "get_edges", object_name=refresh_target)
                         self.design_state.update_from_tool_result(
@@ -548,6 +568,10 @@ class CADAgent:
                             args={"object_name": refresh_target},
                             success=True,
                         )
+                        # Preserve the emitted reference version so it stays
+                        # genuinely stale until an explicit get_edges refresh.
+                        self.design_state.record_topology_reference(
+                            refresh_target, "edge", emitted_ref_version)
                     except Exception as e:
                         # Refresh is best-effort: a failure here must NOT abort
                         # the turn or fabricate a topology fingerprint.
