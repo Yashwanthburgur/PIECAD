@@ -494,6 +494,17 @@ class DesignState:
             self.objects[oid] = DesignObject(object_id=oid)
 
     def _derive_facts(self) -> None:
+        # Preserve topology reference versions recorded by
+        # record_topology_reference(). These are NOT derived facts and must
+        # survive fact recomputation (which runs on every state sync and every
+        # tool-result update). Without this, a fresh get_edges reference would
+        # be wiped before the next fillet/chamfer, causing the agent to omit
+        # `topology_version`, the adapter to default it to 0, and the bridge to
+        # reject a valid reference as stale.
+        preserved_refs = {
+            k: v for k, v in self.derived_facts.items()
+            if k.endswith("_version") and ":" in k
+        }
         facts: Dict[str, Any] = {
             "solid_count": sum(1 for o in self.objects.values() if o.is_solid()),
             "object_count": len(self.objects),
@@ -517,6 +528,7 @@ class DesignState:
                 else:
                     kinds.append("unknown")
             facts["selection_kind"] = kinds
+        facts.update(preserved_refs)
         self.derived_facts = facts
 
     @staticmethod
