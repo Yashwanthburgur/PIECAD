@@ -12,6 +12,7 @@ from core.context import (
     DesignState,
     SessionMemory,
 )
+from core.tool_registry import get_global_registry, infer_capability_from_schema
 
 # ARCHITECTURE RULE - Object Identity: Property change on an unconsumed object -> set_param in place; Topology change -> new feature object, old one is auto-hidden (Ghost).
 
@@ -262,18 +263,20 @@ class CADAgent:
             except (json.JSONDecodeError, TypeError):
                 state_objects = []
 
-            # 2b. Keep the existing ToolRouter gating (unchanged), then let the
-            #     ContextEngine further add plan-required tools.
+            # 2b. Sync registry with current tool schemas (infers capabilities for new tools)
+            self.router.sync_registry(all_tools)
+
+            # 2c. Get state-gated tools from new capability-based router
             router_tools = self.router.filter_tools(all_tools, state_objects)
 
-            # 2c. Update the authoritative DesignState from the live CAD state.
+            # 2d. Update the authoritative DesignState from the live CAD state.
             self._update_design_state(state_json)
 
             # 3. Compile a SELECTIVE context via the ContextEngine (BIP 4.2).
             #     - relevant CAD objects (no blind state dump)
             #     - relevant memory (no blind memory dump)
             #     - relevant conversation history (no blind history dump)
-            #     - plan-required + routed tools (existing ToolRouter preserved)
+            #     - plan-required + routed tools (new capability-based ToolRouter)
             compiled = self.compiler.compile(
                 user_message=user_message,
                 conversation_context=self.conversation,
@@ -283,10 +286,11 @@ class CADAgent:
                 react_step=step + 1,
                 system_prefix=SYSTEM_PROMPT + "\n\n" + REACT_LOOP_INJECTION,
             )
-            tools = compiled.tools or router_tools
+            # Use compiled tools (which already includes plan + router via compiler._select_tools)
+            tools = compiled.tools
             print(
                 f"[Agent] Step {step+1}: {len(tools)}/{len(all_tools)} tools active "
-                f"(routed OR plan-required)"
+                f"(capability-routed + plan-required)"
             )
 
             # 4. Build messages from the compiled context: system (selective
@@ -533,6 +537,10 @@ class CADAgent:
                     out=out,
                     requested_args=requested_args_for_recording,
                 )
+
+                # Record tool health for dynamic availability tracking
+                self.router.record_tool_result(
+                    name, success, error_msg if not success else None)
 
                 # BIP 4.3.9: After a successful topology-changing operation,
                 # refresh the target object's authoritative topology fingerprint

@@ -217,14 +217,20 @@ class ContextCompiler:
         tool_plan: Optional[ToolSelectionPlan],
     ) -> List[Dict[str, Any]]:
         from core.router import ToolRouter  # local import avoids circular import
+        from core.tool_registry import get_global_registry
 
-        router = ToolRouter()
+        # Use the global registry to ensure consistency with agent's router
+        registry = get_global_registry()
+        router = ToolRouter(registry)
+
         state_objects = []
         if design_state is not None:
             state_objects = [o.to_dict(minimal=True)
                              for o in design_state.objects.values()]
 
-        router_names = set(router.get_active_tools(state_objects))
+        # Use new capability-based router API with plan and tool_plan
+        router_names = set(router.get_active_tools(
+            state_objects, plan, tool_plan))
         plan_names = set(plan.required_tools)
         explicit = set()
         if tool_plan is not None:
