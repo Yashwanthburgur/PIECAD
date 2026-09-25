@@ -281,11 +281,13 @@ class CADAgent:
                 intent_result = self.intent_classifier.classify(user_message)
                 intent_plan = self.intent_classifier.to_context_plan(
                     intent_result, user_message)
+                intent_tool_plan = intent_result.tool_selection_plan
                 print(f"[Agent] Intent classified: {intent_result.primary_intent} "
                       f"(confidence={intent_result.confidence:.2f}, "
                       f"tools={len(intent_result.required_tools)})")
             else:
                 intent_plan = None
+                intent_tool_plan = None
 
             # 3. Compile a SELECTIVE context via the ContextEngine (BIP 4.2).
             #     - relevant CAD objects (no blind state dump)
@@ -301,6 +303,7 @@ class CADAgent:
                 react_step=step + 1,
                 system_prefix=SYSTEM_PROMPT + "\n\n" + REACT_LOOP_INJECTION,
                 optional_context_plan=intent_plan,
+                tool_selection_plan=intent_tool_plan,
             )
             # Use compiled tools (which already includes plan + router via compiler._select_tools)
             tools = compiled.tools
