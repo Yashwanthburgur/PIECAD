@@ -129,6 +129,13 @@ def _impl_sketch(id: str, face_ref: str, shapes: list):
     sketch_obj.addProperty("App::PropertyString", "TargetBody", "PieCAD")
     sketch_obj.TargetBody = target_name
 
+    # Make the new feature visible as the current design tip
+    try:
+        if hasattr(sketch_obj, "ViewObject") and sketch_obj.ViewObject:
+            sketch_obj.ViewObject.Visibility = True
+    except Exception:
+        pass
+
     _sync(doc)
     return f"Successfully created sketch '{id}' on face {face_ref} with {len(shapes)} shape(s)."
 
@@ -193,6 +200,13 @@ def _impl_extrude(id: str, sketch_id: str, depth: float, is_cut: bool = False, i
     # Hide the sketch object
     try:
         sketch_obj.ViewObject.Visibility = False
+    except Exception:
+        pass
+
+    # Make the new feature visible as the current design tip
+    try:
+        if hasattr(result_obj, "ViewObject") and result_obj.ViewObject:
+            result_obj.ViewObject.Visibility = True
     except Exception:
         pass
 

@@ -75,6 +75,14 @@ def _impl_pattern_linear(id: str, target_id: str, direction: dict, distance: flo
 
     # Hide the original object
     target_obj.ViewObject.Visibility = False
+
+    # Make the new feature visible as the current design tip
+    try:
+        if hasattr(pattern_obj, "ViewObject") and pattern_obj.ViewObject:
+            pattern_obj.ViewObject.Visibility = True
+    except Exception:
+        pass
+
     _finish(pattern_obj)
     return f"Successfully created linear pattern '{id}' of '{target_id}' with count {c_count} in direction {direction} distance {c_distance}."
 
@@ -153,5 +161,13 @@ def _impl_pattern_circular(id: str, target_id: str, axis_origin: dict, axis_dire
 
     # Hide the original object
     target_obj.ViewObject.Visibility = False
+
+    # Make the new feature visible as the current design tip
+    try:
+        if hasattr(pattern_obj, "ViewObject") and pattern_obj.ViewObject:
+            pattern_obj.ViewObject.Visibility = True
+    except Exception:
+        pass
+
     _finish(pattern_obj)
     return f"Successfully created circular pattern '{id}' of '{target_id}' with count {c_count} around axis {axis_origin}->{axis_direction} angle {c_angle}°."

@@ -148,6 +148,13 @@ def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float,
     except Exception:
         pass
 
+    # Make the new feature visible as the current design tip
+    try:
+        if hasattr(new_obj, "ViewObject") and new_obj.ViewObject:
+            new_obj.ViewObject.Visibility = True
+    except Exception:
+        pass
+
     _sync(doc)
     return f"Successfully created fillet '{id}' on {len(edge_refs)} edge(s) of '{target_id}' with radius {radius}."
 
@@ -232,6 +239,13 @@ def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float,
     except Exception:
         pass
 
+    # Make the new feature visible as the current design tip
+    try:
+        if hasattr(new_obj, "ViewObject") and new_obj.ViewObject:
+            new_obj.ViewObject.Visibility = True
+    except Exception:
+        pass
+
     _sync(doc)
     return f"Successfully created chamfer '{id}' on {len(edge_refs)} edge(s) of '{target_id}' with size {size}."
 
@@ -287,5 +301,13 @@ def _impl_shell(id, target_id, face_refs, thickness):
     shell_obj.Shape = thick_shape
 
     target_obj.ViewObject.Visibility = False
+
+    # Make the new feature visible as the current design tip
+    try:
+        if hasattr(shell_obj, "ViewObject") and shell_obj.ViewObject:
+            shell_obj.ViewObject.Visibility = True
+    except Exception:
+        pass
+
     doc.recompute()
     return _sync(doc)

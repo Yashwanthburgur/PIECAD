@@ -553,8 +553,17 @@ class CADAgent:
                     "shell", "edit_feature", "pattern_linear",
                     "pattern_circular", "delete_feature",
                 }
-                refresh_target = args.get(
-                    "target_id") or args.get("object_name")
+                # BIP 6.1: For feature-producing operations, the newly created
+                # feature (args["id"]) becomes the design tip. The topology
+                # refresh must query the NEW feature, not the consumed source,
+                # so that its topology_version and edges/faces are tracked under
+                # the correct object identity. This ensures feature lineage:
+                # box → fillet → chamfer → fillet, not independent branches.
+                # Use the feature's own ID (args["id"]) as the refresh target.
+                feature_id = args.get("id")
+                # Fall back to target_id for operations that don't create a new feature
+                refresh_target = feature_id if feature_id else (
+                    args.get("target_id") or args.get("object_name"))
                 if success and name in topology_altering_tools and refresh_target:
                     try:
                         # BIP 5.5: capture the version at which the existing edge

@@ -108,6 +108,13 @@ def _impl_boolean(operation: str, base_obj: str, tool_obj: str, result_name: str
     except Exception:
         pass
 
+    # Make the new feature visible as the current design tip
+    try:
+        if hasattr(new_obj, "ViewObject") and new_obj.ViewObject:
+            new_obj.ViewObject.Visibility = True
+    except Exception:
+        pass
+
     _sync(doc)
     return f"Successfully performed '{operation}' on '{base_obj}' and '{tool_obj}' as '{new_obj.Name}'."
 
@@ -134,7 +141,8 @@ def _impl_hole(id: str, target_id: str, origin: dict, direction: dict, diameter:
 
     c_dir_norm = App.Vector(c_dir.x, c_dir.y, c_dir.z)
     if c_dir_norm.Length <= 0:
-        raise RuntimeError("Hole direction vector must have a non-zero length.")
+        raise RuntimeError(
+            "Hole direction vector must have a non-zero length.")
     c_dir_norm.normalize()
 
     if kind == "tapped":
@@ -170,11 +178,26 @@ def _impl_hole(id: str, target_id: str, origin: dict, direction: dict, diameter:
     _impl_set_visible(target_obj, False)
     _impl_set_visible(tool_obj, False)
 
+    # Make the new feature visible as the current design tip
+    try:
+        if hasattr(cut_obj, "ViewObject") and cut_obj.ViewObject:
+            cut_obj.ViewObject.Visibility = True
+    except Exception:
+        pass
+
     # Persist mechanical thread metadata on the resulting feature.
     if kind == "tapped":
         if not hasattr(cut_obj, "ThreadSpec"):
-            cut_obj.addProperty("App::PropertyString", "ThreadSpec", "Mechanical")
+            cut_obj.addProperty("App::PropertyString",
+                                "ThreadSpec", "Mechanical")
         cut_obj.ThreadSpec = canonical_thread_spec
+
+    # Make the new feature visible as the current design tip
+    try:
+        if hasattr(cut_obj, "ViewObject") and cut_obj.ViewObject:
+            cut_obj.ViewObject.Visibility = True
+    except Exception:
+        pass
 
     _sync(doc)
 
