@@ -26,11 +26,22 @@ from adapters.freecad.adapter import FreeCADAdapter  # noqa: E402
 OUT = PROJECT_ROOT / "exports" / "industrial_reliability_proof.txt"
 HOST, PORT = "127.0.0.1", 9876
 
-# The three-turn sequence as specified
+# The extended sequence for industrial reliability + topology safety proof
 SEQUENCE = [
+    # Turn 1: Create box and get edges (capture initial topology)
     "Create a 100x100x50 mm box. Then, find the edges of the box so we can modify them in the next step.",
+    # Turn 2: Perform a topology-changing operation (fillet with too-large radius to trigger failure)
     "Fillet one of those edges with a 500 mm radius.",
+    # Turn 3: Recover with correct radius (error recovery)
+    "Now fillet that same edge with a 5 mm radius.",
+    # Turn 4: Chamfer a different edge (another topology change, invalidates old edge refs)
     "Now chamfer a different edge of that box by 2 mm.",
+    # Turn 5: STALE REFERENCE ATTEMPT - intentionally reuse OLD edge reference from turn 1 with OLD topology version
+    "Fillet the first edge again using the exact same edge reference and topology version from the first get_edges call.",
+    # Turn 6: FRESH REFERENCE - get fresh edges after topology changes
+    "Get the edges of the box again to obtain fresh references.",
+    # Turn 7: FRESH SUCCESS - use fresh reference and fresh topology version
+    "Fillet the first edge using the new edge reference and topology version from the fresh get_edges call.",
 ]
 
 
@@ -117,6 +128,14 @@ def analyze_trace_for_evidence(trace: List[Dict[str, Any]], agent: CADAgent) -> 
             "topology_rejection_NOT_exercised": False,
             "details": [],
         },
+        "E_topology_safety_proof": {
+            "stale_topology_reference_attempted": False,
+            "stale_topology_reference_rejected": False,
+            "fresh_topology_reference_obtained": False,
+            "fresh_operation_succeeded": False,
+            "topology_safety_proven": False,
+            "details": [],
+        },
     }
 
     # Track failures and successes across ALL steps (not per-step)
@@ -129,6 +148,15 @@ def analyze_trace_for_evidence(trace: List[Dict[str, Any]], agent: CADAgent) -> 
 
     # Track get_edges calls for topology freshness
     get_edges_steps = set()
+
+    # Track topology versions and edge refs from get_edges
+    captured_topology_version = None
+    captured_edge_refs = []
+    fresh_topology_version = None
+    fresh_edge_refs = []
+
+    # Track topology-changing operations
+    topology_change_steps = set()
 
     for entry in trace:
         if entry.get("type") == "completion":
@@ -187,13 +215,52 @@ def analyze_trace_for_evidence(trace: List[Dict[str, Any]], agent: CADAgent) -> 
                     f"Turn {step}: Geometry verification unavailable: {entry.get('reason')}"
                 )
 
-            # Track get_edges for topology freshness
+            # Track get_edges calls - capture topology version and edge refs
             if tool == "get_edges" and success:
                 get_edges_steps.add(step)
                 evidence["D_topology_safety"]["get_edges_refresh_occurred"] = True
                 evidence["D_topology_safety"]["details"].append(
                     f"Turn {step}: get_edges called (topology refresh)"
                 )
+                # Capture topology version and edge refs from result
+                result = entry.get("result")
+                if result:
+                    try:
+                        parsed = json.loads(result) if isinstance(
+                            result, str) else result
+                        if isinstance(parsed, dict):
+                            if "topology_version" in parsed:
+                                if captured_topology_version is None:
+                                    captured_topology_version = parsed["topology_version"]
+                                    evidence["E_topology_safety_proof"]["details"].append(
+                                        f"Turn {step}: Initial topology_version captured: {captured_topology_version}"
+                                    )
+                                else:
+                                    fresh_topology_version = parsed["topology_version"]
+                                    evidence["E_topology_safety_proof"]["fresh_topology_reference_obtained"] = True
+                                    evidence["E_topology_safety_proof"]["details"].append(
+                                        f"Turn {step}: Fresh topology_version obtained: {fresh_topology_version}"
+                                    )
+                            if "edges" in parsed:
+                                edges = parsed["edges"]
+                                if not captured_edge_refs:
+                                    captured_edge_refs = [
+                                        e.get("edge_id") for e in edges if "edge_id" in e]
+                                    evidence["E_topology_safety_proof"]["details"].append(
+                                        f"Turn {step}: Initial edge_refs captured: {captured_edge_refs}"
+                                    )
+                                else:
+                                    fresh_edge_refs = [
+                                        e.get("edge_id") for e in edges if "edge_id" in e]
+                                    evidence["E_topology_safety_proof"]["details"].append(
+                                        f"Turn {step}: Fresh edge_refs obtained: {fresh_edge_refs}"
+                                    )
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            # Track topology-changing operations
+            if tool in ("fillet", "chamfer", "hole", "shell", "boolean", "edit_feature", "pattern_linear", "pattern_circular") and success:
+                topology_change_steps.add(step)
 
             # D. Topology Safety - check for stale reference errors
             if not success and error and "stale" in str(error).lower():
@@ -203,6 +270,28 @@ def analyze_trace_for_evidence(trace: List[Dict[str, Any]], agent: CADAgent) -> 
                     f"Turn {step}: Stale reference rejected for {tool}: {error}"
                 )
 
+            # E. Topology Safety Proof - detect stale reference attempt
+            # Check if fillet/chamfer uses old topology_version and old edge_refs
+            if tool in ("fillet", "chamfer") and not success:
+                # Check if this is the intentional stale reference attempt
+                used_topology_version = args.get("topology_version")
+                used_edge_refs = args.get("edge_refs", [])
+
+                # If it uses the captured (old) topology_version and edge_refs after topology changes
+                if captured_topology_version and used_topology_version == captured_topology_version:
+                    if topology_change_steps and any(tcs < step for tcs in topology_change_steps):
+                        # Topology changed since initial get_edges, but old version is being used
+                        evidence["E_topology_safety_proof"]["stale_topology_reference_attempted"] = True
+                        evidence["E_topology_safety_proof"]["details"].append(
+                            f"Turn {step}: STALE ATTEMPT - fillet/chamfer used old topology_version {used_topology_version} after topology changes in steps {topology_change_steps}"
+                        )
+                        # Check if rejection is due to stale topology
+                        if error and "stale" in str(error).lower():
+                            evidence["E_topology_safety_proof"]["stale_topology_reference_rejected"] = True
+                            evidence["E_topology_safety_proof"]["details"].append(
+                                f"Turn {step}: STALE REJECTION - operation rejected due to stale topology: {error}"
+                            )
+
             # Successful fillet/chamfer ONLY counts as fresh-refs if preceded by get_edges in same/prev step
             if tool in ("fillet", "chamfer") and success:
                 # Check if get_edges was called in this step or previous step
@@ -211,12 +300,37 @@ def analyze_trace_for_evidence(trace: List[Dict[str, Any]], agent: CADAgent) -> 
                     evidence["D_topology_safety"]["details"].append(
                         f"Turn {step}: {tool} succeeded with fresh references (get_edges in step {step if step in get_edges_steps else step-1})"
                     )
+                # E. Check if this is the fresh success
+                if fresh_topology_version:
+                    used_topology_version = args.get("topology_version")
+                    if used_topology_version == fresh_topology_version:
+                        evidence["E_topology_safety_proof"]["fresh_operation_succeeded"] = True
+                        evidence["E_topology_safety_proof"]["details"].append(
+                            f"Turn {step}: FRESH SUCCESS - operation succeeded with fresh topology_version {used_topology_version}"
+                        )
 
     # If no stale reference was ever attempted, mark as NOT exercised
     if not evidence["D_topology_safety"]["stale_reference_attempted"]:
         evidence["D_topology_safety"]["topology_rejection_NOT_exercised"] = True
         evidence["D_topology_safety"]["details"].append(
             "LLM never attempted a stale topology reference; topology rejection was NOT exercised."
+        )
+
+    # E. Final topology safety proof determination
+    e = evidence["E_topology_safety_proof"]
+    if (e["stale_topology_reference_attempted"] and
+        e["stale_topology_reference_rejected"] and
+        e["fresh_topology_reference_obtained"] and
+            e["fresh_operation_succeeded"]):
+        e["topology_safety_proven"] = True
+        e["details"].append(
+            "TOPOLOGY SAFETY PROVEN: All required conditions met.")
+    else:
+        e["details"].append(
+            f"TOPOLOGY SAFETY NOT PROVEN: attempted={e['stale_topology_reference_attempted']}, "
+            f"rejected={e['stale_topology_reference_rejected']}, "
+            f"fresh_ref_obtained={e['fresh_topology_reference_obtained']}, "
+            f"fresh_succeeded={e['fresh_operation_succeeded']}"
         )
 
     # C. State Integrity + Requested vs Achieved from DesignState
@@ -389,6 +503,22 @@ def main():
     lines.append(
         f"  - Topology rejection NOT exercised (LLM never attempted stale ref): {ts['topology_rejection_NOT_exercised']}")
     for d in ts["details"]:
+        lines.append(f"    * {d}")
+
+    # E. Topology Safety Proof (deterministic stale-reference rejection)
+    lines.append("\nE. TOPOLOGY SAFETY PROOF")
+    tp = evidence["E_topology_safety_proof"]
+    lines.append(
+        f"  - Stale topology reference attempted: {tp['stale_topology_reference_attempted']}")
+    lines.append(
+        f"  - Stale topology reference rejected: {tp['stale_topology_reference_rejected']}")
+    lines.append(
+        f"  - Fresh topology reference obtained: {tp['fresh_topology_reference_obtained']}")
+    lines.append(
+        f"  - Fresh operation succeeded: {tp['fresh_operation_succeeded']}")
+    lines.append(
+        f"  - TOPOLOGY SAFETY PROVEN: {tp['topology_safety_proven']}")
+    for d in tp["details"]:
         lines.append(f"    * {d}")
 
     # Full trace dump
