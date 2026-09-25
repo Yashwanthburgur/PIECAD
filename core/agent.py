@@ -12,6 +12,7 @@ from core.context import (
     DesignState,
     SessionMemory,
 )
+from core.intent import IntentClassifier
 from core.tool_registry import get_global_registry, infer_capability_from_schema
 
 # ARCHITECTURE RULE - Object Identity: Property change on an unconsumed object -> set_param in place; Topology change -> new feature object, old one is auto-hidden (Ghost).
@@ -128,6 +129,8 @@ class CADAgent:
         self.provider = provider or LLMProvider()
         # Tool gating: only relevant tools are exposed to the LLM per step.
         self.router = ToolRouter()
+        # Intent classifier for dynamic tool routing
+        self.intent_classifier = IntentClassifier()
         # Long-term conversation history: ONLY user prompts and final agent responses
         self.history = []
         # Evaluation instrumentation (opt-in)
@@ -272,6 +275,18 @@ class CADAgent:
             # 2d. Update the authoritative DesignState from the live CAD state.
             self._update_design_state(state_json)
 
+            # 3. INTENT CLASSIFICATION: classify user intent once per turn (first step)
+            #    and reuse the plan for all ReAct steps in this turn.
+            if step == 0:
+                intent_result = self.intent_classifier.classify(user_message)
+                intent_plan = self.intent_classifier.to_context_plan(
+                    intent_result, user_message)
+                print(f"[Agent] Intent classified: {intent_result.primary_intent} "
+                      f"(confidence={intent_result.confidence:.2f}, "
+                      f"tools={len(intent_result.required_tools)})")
+            else:
+                intent_plan = None
+
             # 3. Compile a SELECTIVE context via the ContextEngine (BIP 4.2).
             #     - relevant CAD objects (no blind state dump)
             #     - relevant memory (no blind memory dump)
@@ -285,6 +300,7 @@ class CADAgent:
                 available_tools=all_tools,
                 react_step=step + 1,
                 system_prefix=SYSTEM_PROMPT + "\n\n" + REACT_LOOP_INJECTION,
+                optional_context_plan=intent_plan,
             )
             # Use compiled tools (which already includes plan + router via compiler._select_tools)
             tools = compiled.tools
