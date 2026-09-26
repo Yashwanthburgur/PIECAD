@@ -176,6 +176,58 @@ class FreeCADAdapter(CADAdapter):
         self.mcp_client = FreeCADMCPClient()  # kept for backward compatibility
         # Tool cache to avoid repeated MCP server launches
         self._cached_tools: List[Dict[str, Any]] | None = None
+        # BIP 6.3: Connection resilience - track consecutive connection failures
+        # to avoid tight reconnection loops.
+        self._consecutive_failures: int = 0
+        self._max_consecutive_failures: int = 3
+
+    def _ensure_proxy(self) -> xmlrpc.client.ServerProxy:
+        """Return a live XML-RPC proxy, recreating it if the connection was lost.
+
+        BIP 6.3: The FreeCAD bridge can restart (e.g., FreeCAD GUI restart, port
+        rebind). The original proxy becomes stale. This method proactively
+        recreates the proxy on connection/transport errors so that retries at the
+        agent level (BIP 6.2) actually succeed against a fresh connection.
+        """
+        # If we've had too many consecutive failures, force proxy recreation
+        # on the next call to avoid caching a dead connection indefinitely.
+        if self._consecutive_failures >= self._max_consecutive_failures:
+            self._proxy = xmlrpc.client.ServerProxy(self.url, allow_none=True)
+            self._consecutive_failures = 0
+        return self._proxy
+
+    def _record_proxy_result(self, success: bool) -> None:
+        """Track consecutive connection outcomes for adaptive reconnection."""
+        if success:
+            self._consecutive_failures = 0
+        else:
+            self._consecutive_failures += 1
+            # Force fresh proxy on next call if threshold exceeded
+            if self._consecutive_failures >= self._max_consecutive_failures:
+                self._proxy = xmlrpc.client.ServerProxy(
+                    self.url, allow_none=True)
+
+    def _call_proxy(self, method_name: str, *args, **kwargs) -> Any:
+        """Call a method on the XML-RPC proxy with automatic reconnection.
+
+        BIP 6.3: If the call fails with a connection/transport error, the proxy
+        is recreated and the call is retried once. This allows agent-level retries
+        (BIP 6.2) to succeed after a bridge restart.
+        """
+        proxy = self._ensure_proxy()
+        try:
+            method = getattr(proxy, method_name)
+            result = method(*args, **kwargs)
+            self._record_proxy_result(True)
+            return result
+        except (ConnectionError, OSError, xmlrpc.client.ProtocolError) as e:
+            self._record_proxy_result(False)
+            # Recreate proxy and retry once
+            self._proxy = xmlrpc.client.ServerProxy(self.url, allow_none=True)
+            method = getattr(self._proxy, method_name)
+            result = method(*args, **kwargs)
+            self._record_proxy_result(True)
+            return result
 
     # ------------------------------------------------------------------ #
     # External MCP tool execution (synchronous wrapper over the async client)
@@ -570,15 +622,15 @@ class FreeCADAdapter(CADAdapter):
                                          "x": 0.0, "y": 0.0, "z": 0.0})
 
                 # Create the box
-                result = self._proxy.create_box(
-                    length, width, height, str(obj_id))
+                result = self._call_proxy(
+                    "create_box", length, width, height, str(obj_id))
 
                 # Apply translation if origin is not (0,0,0)
                 ox = float(origin.get("x", 0))
                 oy = float(origin.get("y", 0))
                 oz = float(origin.get("z", 0))
                 if ox != 0 or oy != 0 or oz != 0:
-                    self._proxy.translate(str(obj_id), ox, oy, oz)
+                    self._call_proxy("translate", str(obj_id), ox, oy, oz)
 
                 return str(result)
 
@@ -591,15 +643,15 @@ class FreeCADAdapter(CADAdapter):
                                          "x": 0.0, "y": 0.0, "z": 0.0})
 
                 # Create the cylinder
-                result = self._proxy.create_cylinder(
-                    radius, height, str(obj_id))
+                result = self._call_proxy(
+                    "create_cylinder", radius, height, str(obj_id))
 
                 # Apply translation if origin is not (0,0,0)
                 ox = float(origin.get("x", 0))
                 oy = float(origin.get("y", 0))
                 oz = float(origin.get("z", 0))
                 if ox != 0 or oy != 0 or oz != 0:
-                    self._proxy.translate(str(obj_id), ox, oy, oz)
+                    self._call_proxy("translate", str(obj_id), ox, oy, oz)
 
                 return str(result)
 
@@ -611,7 +663,8 @@ class FreeCADAdapter(CADAdapter):
                 tool_id = kwargs["tool_id"]
 
                 return str(
-                    self._proxy.boolean(
+                    self._call_proxy(
+                        "boolean",
                         str(mode),
                         str(target_id),
                         str(tool_id),
@@ -622,12 +675,12 @@ class FreeCADAdapter(CADAdapter):
             if tool_name == "delete_feature":
                 target_feature_id = kwargs["target_feature_id"]
                 return str(
-                    self._proxy.delete_object(str(target_feature_id))
+                    self._call_proxy("delete_object", str(target_feature_id))
                 )
 
             if tool_name == "get_faces":
                 object_name = kwargs["object_name"]
-                faces_result = self._proxy.get_faces(str(object_name))
+                faces_result = self._call_proxy("get_faces", str(object_name))
                 # Parse the new dict format with topology_version
                 try:
                     parsed = json.loads(faces_result)
@@ -652,7 +705,8 @@ class FreeCADAdapter(CADAdapter):
                 thread_spec = kwargs.get("thread_spec")
 
                 return str(
-                    self._proxy.hole(
+                    self._call_proxy(
+                        "hole",
                         str(obj_id),
                         str(target_id),
                         origin,
@@ -679,7 +733,8 @@ class FreeCADAdapter(CADAdapter):
                     thick = -1.0
                 shell_id = kwargs.get("id") or "shell_op"
                 return str(
-                    self._proxy.shell(
+                    self._call_proxy(
+                        "shell",
                         shell_id,
                         kwargs.get("target_id", ""),
                         f_refs,
@@ -728,7 +783,8 @@ class FreeCADAdapter(CADAdapter):
                             kwargs["moving_ref"] = refs[0]
 
                 return str(
-                    self._proxy.mate(
+                    self._call_proxy(
+                        "mate",
                         kwargs.get("id") or "mate_op",
                         str(kwargs.get("mate_type", "concentric")),
                         str(kwargs.get("moving_target", "")),
@@ -745,7 +801,8 @@ class FreeCADAdapter(CADAdapter):
                 face_ref = kwargs["face_ref"]
                 shapes = kwargs["shapes"]
                 return str(
-                    self._proxy.sketch(
+                    self._call_proxy(
+                        "sketch",
                         str(obj_id),
                         str(face_ref),
                         shapes,
@@ -759,7 +816,8 @@ class FreeCADAdapter(CADAdapter):
                 is_cut = kwargs.get("is_cut", False)
                 is_solid = kwargs.get("is_solid", True)
                 return str(
-                    self._proxy.extrude(
+                    self._call_proxy(
+                        "extrude",
                         str(obj_id),
                         str(sketch_id),
                         depth,
@@ -770,7 +828,7 @@ class FreeCADAdapter(CADAdapter):
 
             if tool_name == "get_edges":
                 object_name = kwargs["object_name"]
-                edges_result = self._proxy.get_edges(str(object_name))
+                edges_result = self._call_proxy("get_edges", str(object_name))
                 # Parse the new dict format with topology_version
                 try:
                     parsed = json.loads(edges_result)
@@ -794,7 +852,8 @@ class FreeCADAdapter(CADAdapter):
                 # The DesignState tracks topology versions; we retrieve it here.
                 topology_version = kwargs.get("topology_version", 0)
                 return str(
-                    self._proxy.fillet(
+                    self._call_proxy(
+                        "fillet",
                         str(obj_id),
                         str(target_id),
                         edge_refs,
@@ -811,7 +870,8 @@ class FreeCADAdapter(CADAdapter):
                 # BIP 4.3.4: Pass topology version for edge_refs validation
                 topology_version = kwargs.get("topology_version", 0)
                 return str(
-                    self._proxy.chamfer(
+                    self._call_proxy(
+                        "chamfer",
                         str(obj_id),
                         str(target_id),
                         edge_refs,
@@ -829,7 +889,8 @@ class FreeCADAdapter(CADAdapter):
                 count = int(kwargs["count"])
 
                 return str(
-                    self._proxy.pattern_linear(
+                    self._call_proxy(
+                        "pattern_linear",
                         str(obj_id),
                         str(target_id),
                         direction,
@@ -849,7 +910,8 @@ class FreeCADAdapter(CADAdapter):
                 count = int(kwargs["count"])
 
                 return str(
-                    self._proxy.pattern_circular(
+                    self._call_proxy(
+                        "pattern_circular",
                         str(obj_id),
                         str(target_id),
                         axis_origin,
@@ -861,7 +923,8 @@ class FreeCADAdapter(CADAdapter):
 
             if tool_name == "get_mass_properties":
                 return str(
-                    self._proxy.get_mass_properties(
+                    self._call_proxy(
+                        "get_mass_properties",
                         kwargs.get("id", "mass"),
                         kwargs.get("object_name", ""),
                     )
@@ -869,13 +932,14 @@ class FreeCADAdapter(CADAdapter):
 
             if tool_name == "get_bom":
                 return str(
-                    self._proxy.get_bom(kwargs.get("id", "bom"))
+                    self._call_proxy("get_bom", kwargs.get("id", "bom"))
                 )
 
             if tool_name == "interference_check":
                 part_ids = kwargs.get("part_ids")
                 return str(
-                    self._proxy.interference_check(
+                    self._call_proxy(
+                        "interference_check",
                         kwargs.get("id", "interference"),
                         part_ids
                     )
@@ -900,7 +964,7 @@ class FreeCADAdapter(CADAdapter):
                 filepath = str(exports_dir / safe_name)
 
                 return str(
-                    self._proxy.export_model(exp_id, fmt, filepath)
+                    self._call_proxy("export_model", exp_id, fmt, filepath)
                 )
 
             if tool_name == "edit_feature":
@@ -912,7 +976,8 @@ class FreeCADAdapter(CADAdapter):
                     except Exception:
                         params = {}
                 return str(
-                    self._proxy.edit_feature(
+                    self._call_proxy(
+                        "edit_feature",
                         kwargs.get("id", "edit"),
                         kwargs.get("target_id", ""),
                         params
@@ -955,7 +1020,7 @@ class FreeCADAdapter(CADAdapter):
         distinguish a failed retrieval from an empty document.
         """
         try:
-            return str(self._proxy.get_state())
+            return str(self._call_proxy("get_state"))
         except (ConnectionError, OSError) as e:
             raise RuntimeError(
                 f"Cannot reach FreeCAD bridge at {self.url}: {e}") from e
@@ -969,14 +1034,14 @@ class FreeCADAdapter(CADAdapter):
     # ------------------------------------------------------------------ #
     def clear_document(self):
         """Clear the FreeCAD document by closing it and creating a new one."""
-        return self._proxy.clear_document()
+        return self._call_proxy("clear_document")
 
     # ------------------------------------------------------------------ #
     # Backend API methods (not LLM tools)
     # ------------------------------------------------------------------ #
     def export_obj(self, filepath: str) -> str:
         """Exports the current visible CAD state to a .obj file."""
-        return str(self._proxy.export_obj(filepath))
+        return str(self._call_proxy("export_obj", filepath))
 
     def export_state_model(self, filepath: str, format: str = "glb") -> str:
         """Exports the current visible CAD state to GLB/glTF for the web viewer.
@@ -984,4 +1049,4 @@ class FreeCADAdapter(CADAdapter):
         Uses the bridge's export_current_state, which prefers FreeCAD's native
         glTF/GLB exporter and falls back to a standard .obj when unavailable.
         """
-        return str(self._proxy.export_current_state(filepath, format))
+        return str(self._call_proxy("export_current_state", filepath, format))
