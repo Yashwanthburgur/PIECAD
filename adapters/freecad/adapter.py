@@ -160,7 +160,7 @@ class _MCPWorker:
             print(f"[FreeCADAdapter] Warning: MCP server unreachable - {e}")
             return []
 
-    def execute_tool(self, name: str, args: Dict[str, Any], timeout: float = _DEFAULT_MCP_TIMEOUT) -> str:
+    def execute_tool(self, name: str, args: Dict[str, Any], timeout: float = _DEFAULT_MCP_TIMEOUT, operation_id: Optional[str] = None) -> str:
         """Execute a tool through the external MCP server client with auto-reconnect and timeout.
 
         BIP 6.4: If the MCP server subprocess dies, the stdio transport breaks.
@@ -170,6 +170,8 @@ class _MCPWorker:
         BIP 6.7: MCP tool execution is bounded by a timeout. If the MCP server/tool
         call hangs, the execution is terminated and a structured timeout error is
         returned so the agent can continue/recover.
+
+        BIP 6.9: Include operation_id in timeout response for late completion tracking.
         """
         async def _execute():
             client = await self._ensure_mcp_client()
@@ -202,12 +204,15 @@ class _MCPWorker:
             error_str = str(e).lower()
             if "timeout" in error_str or isinstance(e, asyncio.TimeoutError):
                 self._record_mcp_result(False)
-                return json.dumps({
+                result = {
                     "success": False,
                     "error": f"MCP tool '{name}' timed out after {timeout:.1f}s.",
                     "error_type": "mcp_timeout",
                     "timeout_seconds": timeout,
-                })
+                }
+                if operation_id:
+                    result["operation_id"] = operation_id
+                return json.dumps(result)
             # Check if it's a transport/connection error that warrants reconnection
             import traceback
             transport_errors = ("connection", "stdio", "transport", "broken pipe",
@@ -313,8 +318,12 @@ class FreeCADAdapter(CADAdapter):
 
         BIP 6.8: Return structured error JSON instead of raising, so the agent can
         uniformly detect timeout failures from both FreeCAD and MCP paths.
+
+        BIP 6.9: Include operation_id in timeout response for late completion tracking.
         """
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
+        operation_id = kwargs.pop("_operation_id", None)
 
         def _call():
             return self._call_proxy(method_name, *args, **kwargs)
@@ -327,26 +336,31 @@ class FreeCADAdapter(CADAdapter):
                 # Cancel the future (best effort; underlying XML-RPC call continues in background)
                 future.cancel()
                 # BIP 6.8: Return structured error JSON for uniform timeout handling
-                return json.dumps({
+                # BIP 6.9: Include operation_id for tracking
+                result = {
                     "success": False,
                     "error": f"XML-RPC call '{method_name}' timed out after {timeout:.1f}s.",
                     "error_type": "freecad_timeout",
                     "timeout_seconds": timeout,
-                })
+                }
+                if operation_id:
+                    result["operation_id"] = operation_id
+                return json.dumps(result)
 
     # ------------------------------------------------------------------ #
     # External MCP tool execution (synchronous wrapper over the async client)
     # ------------------------------------------------------------------ #
-    def _run_mcp_tool(self, tool_name: str, arguments: Dict[str, Any], timeout: float = _DEFAULT_MCP_TIMEOUT) -> str:
+    def _run_mcp_tool(self, tool_name: str, arguments: Dict[str, Any], timeout: float = _DEFAULT_MCP_TIMEOUT, operation_id: Optional[str] = None) -> str:
         """Execute a tool through the external MCP server client.
 
         Connects the client on demand, delegates to ``mcp_client.call_tool``,
         and returns a JSON/serialized string result for the agent.
 
         BIP 6.7: MCP tool execution is bounded by a timeout.
+        BIP 6.9: Include operation_id for late completion tracking.
         """
         worker = _get_mcp_worker()
-        return worker.execute_tool(tool_name, arguments, timeout=timeout)
+        return worker.execute_tool(tool_name, arguments, timeout=timeout, operation_id=operation_id)
 
     async def _async_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         """Async version kept for backward compatibility."""
@@ -659,6 +673,9 @@ class FreeCADAdapter(CADAdapter):
         # BIP 6.6: Extract per-call timeout (default 120s)
         timeout = kwargs.pop("_timeout", 120.0)
 
+        # BIP 6.9: Extract operation ID for tracking late completion
+        operation_id = kwargs.pop("_operation_id", None)
+
         # Sanitize tool name (e.g., 'cylinder.op' -> 'cylinder')
         tool_name = tool_name.split('.')[0]
 
@@ -710,7 +727,7 @@ class FreeCADAdapter(CADAdapter):
             }
             if tool_name in mcp_names:
                 timeout = kwargs.pop("_timeout", _DEFAULT_MCP_TIMEOUT)
-                return self._execute_mcp_tool(tool_name, kwargs, timeout=timeout)
+                return self._execute_mcp_tool(tool_name, kwargs, timeout=timeout, operation_id=operation_id)
 
             # Step C: Unknown tool - fail fast without launching server
             return json.dumps(
@@ -721,7 +738,7 @@ class FreeCADAdapter(CADAdapter):
             # Route external tools through the MCP server client instead of the
             # XML-RPC bridge. The 19 core tools continue to use the bridge below.
             if tool_name == "partdesign_sketch_constraint":
-                return self._run_mcp_tool(tool_name, kwargs)
+                return self._run_mcp_tool(tool_name, kwargs, operation_id=operation_id)
 
             if tool_name == "box":
                 # Extract parameters from IR kwargs (required fields guaranteed by schema)

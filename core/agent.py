@@ -180,6 +180,12 @@ class CADAgent:
         # the same tool/target has different args, both are preserved.
         self._last_failed_args: Dict[tuple, Dict[str, Any]] = {}
 
+        # BIP 6.9: Track pending/unresolved operations to protect against late
+        # completion after timeout. Maps operation_id -> {tool, args, target, step, ts}
+        self._pending_operations: Dict[str, Dict[str, Any]] = {}
+        # Counter for generating unique operation IDs
+        self._operation_counter: int = 0
+
     def _is_transient_error(self, error: RuntimeError) -> bool:
         """Return True if the RuntimeError wraps a transient connection/transport failure.
 
@@ -315,6 +321,31 @@ class CADAgent:
             success=success, error=error,
             requested_args=requested_args,
         )
+
+    def _check_pending_operations_against_state(self, state_objects: List[Dict[str, Any]]) -> None:
+        """BIP 6.9: Check if any pending (timed-out) operations have late-completed.
+
+        When a mutation operation times out, we track it in _pending_operations.
+        If state refresh shows the target object now exists, the operation may have
+        completed late. We don't automatically record it as success (the agent
+        already recorded failure), but we log it for audit and clear the pending entry.
+
+        Args:
+            state_objects: List of object dicts from current CAD state
+        """
+        existing_ids = {obj.get("id")
+                        for obj in state_objects if isinstance(obj, dict)}
+        pending_to_clear = []
+        for op_id, pending in self._pending_operations.items():
+            target_id = pending.get("target_id")
+            feature_id = pending.get("args", {}).get("id")
+            # Check if either the target or the new feature ID exists in state
+            if (target_id and target_id in existing_ids) or (feature_id and feature_id in existing_ids):
+                print(f"[LateCompletion] Operation {op_id} ({pending['tool']}) may have completed late. "
+                      f"Target/feature found in state. Clearing pending.")
+                pending_to_clear.append(op_id)
+        for op_id in pending_to_clear:
+            self._pending_operations.pop(op_id, None)
 
     def get_context_telemetry(self) -> List[Dict[str, Any]]:
         """Return recorded per-LLM-call context telemetry (estimate flags set).
@@ -633,6 +664,10 @@ class CADAgent:
                 print(
                     f"[Execution] Step {step+1}: Tool '{name}' with args: {args}")
 
+                # BIP 6.9: Generate unique operation ID for this execution attempt
+                self._operation_counter += 1
+                operation_id = f"op_{self._operation_counter}_{name}_{step+1}"
+
                 # --- Execute with transient retry; retain non-transient errors ---
                 out = None
                 error = None
@@ -642,7 +677,9 @@ class CADAgent:
                 for attempt in range(self.MAX_RETRIES + 1):
                     attempts = attempt + 1
                     try:
-                        out = self.adapter.execute_command(name, **args)
+                        # Pass operation_id to adapter for tracking (adapter may ignore if not supported)
+                        out = self.adapter.execute_command(
+                            name, _operation_id=operation_id, **args)
                         # BIP 6.8: Check if the returned result is a structured error (e.g., timeout).
                         # Both FreeCAD timeout (BIP 6.6) and MCP timeout (BIP 6.7) return JSON
                         # with error_type. This must NOT be treated as success.
@@ -656,6 +693,16 @@ class CADAgent:
                                     error_type = parsed.get("error_type", "")
                                     if "timeout" in error_type.lower():
                                         transient = True  # timeout is transient for retry purposes
+                                        # BIP 6.9: Mark operation as pending/unresolved
+                                        self._pending_operations[operation_id] = {
+                                            "tool": name,
+                                            "args": dict(args),
+                                            "target_id": target,
+                                            "step": step + 1,
+                                            "ts": time.time(),
+                                            "status": "timeout",
+                                            "error_type": error_type,
+                                        }
                                     else:
                                         transient = self._is_transient_error(
                                             error)
@@ -664,6 +711,17 @@ class CADAgent:
                             except (json.JSONDecodeError, TypeError):
                                 # Not JSON or not a structured error - treat as success
                                 pass
+                        # BIP 6.9: Check for late completion of a previously timed-out operation
+                        # If this operation_id was pending and now succeeds, it's a late completion
+                        if operation_id in self._pending_operations:
+                            pending = self._pending_operations.pop(
+                                operation_id)
+                            # Late completion: don't trust it blindly; verify via state refresh
+                            # We still record success but mark as late for audit
+                            pending["status"] = "late_completion"
+                            print(
+                                f"[LateCompletion] Operation {operation_id} ({name}) completed after timeout. "
+                                f"State will be verified via refresh.")
                         success = True
                         break
                     except (ConnectionError, OSError) as e:
@@ -827,18 +885,34 @@ class CADAgent:
             # After EVERY successful tool execution, refresh DesignState from the
             # live CAD state BEFORE the next ReAct iteration. This ensures the
             # compiled context for the next step reflects the actual CAD state.
+
+            # BIP 6.9: Also refresh state after a timeout to detect late completion
+            # of the underlying operation. This provides safe reconciliation.
+            needs_state_refresh = True
+            # Only skip if all operations in this step were query-only (get_state, get_edges, etc.)
+            mutation_tools = {"box", "cylinder", "boolean", "hole", "fillet", "chamfer",
+                              "shell", "edit_feature", "pattern_linear", "pattern_circular",
+                              "delete_feature", "mate", "sketch", "extrude"}
+            if all(tc.function.name not in mutation_tools for tc in response.tool_calls):
+                needs_state_refresh = False
+
             state_retrieval_failed = False
-            try:
-                new_state_json = self.adapter.get_state()
-                new_state = json.loads(new_state_json)
-                # Immediately synchronize DesignState with the live CAD state.
-                self._update_design_state(new_state_json)
-            except Exception as e:
-                print(
-                    f"[Agent] Warning: Failed to get state for verification/sync: {e}")
-                # Mark state as unavailable but preserve last known-good objects.
-                self.design_state.mark_state_unavailable()
-                state_retrieval_failed = True
+            if needs_state_refresh:
+                try:
+                    new_state_json = self.adapter.get_state()
+                    new_state = json.loads(new_state_json)
+                    # Immediately synchronize DesignState with the live CAD state.
+                    self._update_design_state(new_state_json)
+                    # BIP 6.9: Check if any pending operation's target now exists (late completion)
+                    self._check_pending_operations_against_state(new_state)
+                except Exception as e:
+                    print(
+                        f"[Agent] Warning: Failed to get state for verification/sync: {e}")
+                    # Mark state as unavailable but preserve last known-good objects.
+                    self.design_state.mark_state_unavailable()
+                    state_retrieval_failed = True
+                    new_state = []
+            else:
                 new_state = []
 
             errors = check_geometry(new_state)
