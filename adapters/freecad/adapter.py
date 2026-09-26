@@ -35,6 +35,11 @@ def _parse_dict_arg(arg, default_val):
     return default_val
 
 
+# BIP 6.7: Default MCP execution timeout (seconds).
+# Matches the default timeout architecture from BIP 6.6.
+_DEFAULT_MCP_TIMEOUT = 120.0
+
+
 class _MCPWorker:
     """Dedicated thread with its own event loop for MCP operations.
 
@@ -81,12 +86,12 @@ class _MCPWorker:
             self._thread.join(timeout=5.0)
         self._executor.shutdown(wait=True)
 
-    def _submit_async(self, coro):
+    def _submit_async(self, coro, timeout: float = 60.0):
         """Submit an async coroutine to the worker's event loop and wait for result."""
         if not self._started.is_set():
             self.start()
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=60.0)
+        return future.result(timeout=timeout)
 
     def ensure_connected(self):
         """Ensure MCP client is connected."""
@@ -155,12 +160,16 @@ class _MCPWorker:
             print(f"[FreeCADAdapter] Warning: MCP server unreachable - {e}")
             return []
 
-    def execute_tool(self, name: str, args: Dict[str, Any]) -> str:
-        """Execute a tool through the external MCP server client with auto-reconnect.
+    def execute_tool(self, name: str, args: Dict[str, Any], timeout: float = _DEFAULT_MCP_TIMEOUT) -> str:
+        """Execute a tool through the external MCP server client with auto-reconnect and timeout.
 
         BIP 6.4: If the MCP server subprocess dies, the stdio transport breaks.
         This method recreates the client and retries once, so agent-level retries
         (BIP 6.2) succeed after an MCP server restart.
+
+        BIP 6.7: MCP tool execution is bounded by a timeout. If the MCP server/tool
+        call hangs, the execution is terminated and a structured timeout error is
+        returned so the agent can continue/recover.
         """
         async def _execute():
             client = await self._ensure_mcp_client()
@@ -187,18 +196,27 @@ class _MCPWorker:
             return str(result)
 
         try:
-            return self._submit_async(_execute())
+            return self._submit_async(_execute(), timeout=timeout)
         except Exception as e:
+            # Check if it's a timeout
+            error_str = str(e).lower()
+            if "timeout" in error_str or isinstance(e, asyncio.TimeoutError):
+                self._record_mcp_result(False)
+                return json.dumps({
+                    "success": False,
+                    "error": f"MCP tool '{name}' timed out after {timeout:.1f}s.",
+                    "error_type": "mcp_timeout",
+                    "timeout_seconds": timeout,
+                })
             # Check if it's a transport/connection error that warrants reconnection
             import traceback
-            error_str = str(e).lower()
             transport_errors = ("connection", "stdio", "transport", "broken pipe",
                                 "eof", "closed", "reset", "refused")
             if any(t in error_str for t in transport_errors):
                 self._record_mcp_result(False)
                 # Retry once with fresh client
                 try:
-                    return self._submit_async(_execute())
+                    return self._submit_async(_execute(), timeout=timeout)
                 except Exception as e2:
                     self._record_mcp_result(False)
                     traceback.print_exc()
@@ -312,14 +330,16 @@ class FreeCADAdapter(CADAdapter):
     # ------------------------------------------------------------------ #
     # External MCP tool execution (synchronous wrapper over the async client)
     # ------------------------------------------------------------------ #
-    def _run_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+    def _run_mcp_tool(self, tool_name: str, arguments: Dict[str, Any], timeout: float = _DEFAULT_MCP_TIMEOUT) -> str:
         """Execute a tool through the external MCP server client.
 
         Connects the client on demand, delegates to ``mcp_client.call_tool``,
         and returns a JSON/serialized string result for the agent.
+
+        BIP 6.7: MCP tool execution is bounded by a timeout.
         """
         worker = _get_mcp_worker()
-        return worker.execute_tool(tool_name, arguments)
+        return worker.execute_tool(tool_name, arguments, timeout=timeout)
 
     async def _async_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         """Async version kept for backward compatibility."""
@@ -682,7 +702,8 @@ class FreeCADAdapter(CADAdapter):
                 if tool["function"]["name"] not in local_names
             }
             if tool_name in mcp_names:
-                return self._execute_mcp_tool(tool_name, kwargs)
+                timeout = kwargs.pop("_timeout", _DEFAULT_MCP_TIMEOUT)
+                return self._execute_mcp_tool(tool_name, kwargs, timeout=timeout)
 
             # Step C: Unknown tool - fail fast without launching server
             return json.dumps(
