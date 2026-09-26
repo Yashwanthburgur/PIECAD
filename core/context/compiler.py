@@ -321,7 +321,91 @@ class ContextCompiler:
             self.system_prefix = system_prefix
         compiled = self._assemble(compiled)
 
-        # 7. size
+        # 7. size - enforce total context budget
+        # If estimated tokens exceed maximum, proportionally trim sections
+        # (prioritizing tools > state > memory > history)
+        total_est = compiled.estimated_total_tokens()
+        max_allowed = (self.budget.maximum_context_tokens or 20000) - \
+            (self.budget.reserved_output_tokens or 1000)
+        if total_est > max_allowed:
+            # Determine how much to trim from each section
+            tool_est = estimate_tokens(json.dumps(tools, default=str))
+            state_est = estimate_tokens(json.dumps(state, default=str))
+            memory_est = estimate_tokens(json.dumps(memory, default=str))
+            history_est = estimate_tokens(json.dumps(history, default=str))
+            system_est = estimate_tokens(self.system_prefix)
+            user_est = estimate_tokens(user_message)
+
+            # Fixed overhead (system + user) cannot be trimmed
+            fixed_overhead = system_est + user_est
+            trim_target = total_est - max_allowed
+
+            # Trim sections in priority order: history -> memory -> state -> tools
+            # (tools are most critical for reasoning)
+            sections = [
+                ("history", history, history_est, 1.0),
+                ("memory", memory, memory_est, 1.0),
+                # preserve state more aggressively
+                ("state", state, state_est, 0.5),
+                ("tools", tools, tool_est, 0.2),   # tools most important
+            ]
+
+            for section_name, section_data, section_est, protect_factor in sections:
+                if trim_target <= 0:
+                    break
+                # Amount available to trim from this section
+                max_trim = int(section_est * protect_factor)
+                if max_trim <= 0:
+                    continue
+                trim_amount = min(trim_target, max_trim)
+
+                if section_name == "tools":
+                    # Trim tools from the end (least priority first)
+                    tools = self._trim_tool_list(tools, trim_amount)
+                    self.budget.note_dropped("tools_overflow")
+                elif section_name == "state":
+                    # Trim state objects from the end
+                    if "objects" in state:
+                        state["objects"] = self._trim_object_list(state["objects"],
+                                                                  max(0, section_est - trim_amount))
+                    self.budget.note_dropped("state_objects_overflow")
+                elif section_name == "memory":
+                    # Trim memory by reducing entries
+                    for kind in memory:
+                        if isinstance(memory[kind], list) and trim_amount > 0:
+                            memory[kind] = memory[kind][:max(
+                                1, len(memory[kind]) // 2)]
+                    self.budget.note_dropped("memory_overflow")
+                elif section_name == "history":
+                    # Trim history
+                    if isinstance(history, list) and trim_amount > 0:
+                        history = history[:max(1, len(history) // 2)]
+                    self.budget.note_dropped("history_overflow")
+
+                trim_target -= trim_amount
+
+            # Reassemble with trimmed sections
+            compiled = CompiledContext(
+                system_context=self.system_prefix,
+                user_context=user_message,
+                conversation=history,
+                design_state=state,
+                memory=memory,
+                tools=tools,
+                tools_exposed=len(tools),
+                plan=plan.to_dict(),
+                metadata={
+                    "react_step": react_step,
+                    "reasoning_mode": plan.reasoning_mode,
+                    "confidence": plan.confidence,
+                    "ambiguity": plan.ambiguity,
+                    "matched_rules": plan.additional_context.get("matched_rules", []),
+                },
+            )
+            if system_prefix:
+                self.system_prefix = system_prefix
+            compiled = self._assemble(compiled)
+
         telemetry = ContextTelemetry(
             react_step=react_step,
             estimated_context_tokens=compiled.estimated_total_tokens(),
@@ -378,3 +462,28 @@ class ContextCompiler:
             kept.append(obj)
             running += cost
         return kept
+
+    def _trim_tool_list(
+        self, tools: List[Dict[str, Any]], trim_tokens: int
+    ) -> List[Dict[str, Any]]:
+        """Trim a list of tool schemas by removing the least-critical tools.
+
+        Removes tools from the end of the list (which are typically the
+        lower-priority/expansion tools) until the estimated token reduction
+        meets trim_tokens.
+        """
+        if trim_tokens <= 0 or not tools:
+            return tools
+        total = estimate_tokens(json.dumps(tools, default=str))
+        if total <= trim_tokens:
+            return tools[:1]  # Keep at least 1 tool
+        kept: List[Dict[str, Any]] = []
+        running = 0
+        # Preserve the earliest (highest priority) tools
+        for tool in tools:
+            cost = estimate_tokens(json.dumps(tool, default=str))
+            if running + cost > total - trim_tokens:
+                break
+            kept.append(tool)
+            running += cost
+        return kept if kept else tools[:1]
