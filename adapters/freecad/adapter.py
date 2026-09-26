@@ -52,6 +52,10 @@ class _MCPWorker:
         self._mcp_client = FreeCADMCPClient()
         self._connected = False
         self._lock = threading.Lock()
+        # BIP 6.4: MCP server connection resilience - track consecutive failures
+        # to handle MCP server subprocess crashes/restarts.
+        self._consecutive_failures: int = 0
+        self._max_consecutive_failures: int = 3
 
     def _run_loop(self):
         """Run the event loop in a dedicated thread."""
@@ -105,6 +109,36 @@ class _MCPWorker:
             await self._mcp_client.disconnect()
         self._connected = False
 
+    def _record_mcp_result(self, success: bool) -> None:
+        """Track consecutive MCP connection outcomes for adaptive reconnection.
+
+        BIP 6.4: The MCP server subprocess can crash/restart independently of the
+        XML-RPC bridge. This tracks failures to trigger reconnection.
+        """
+        if success:
+            self._consecutive_failures = 0
+        else:
+            self._consecutive_failures += 1
+            # Force fresh client on next call if threshold exceeded
+            if self._consecutive_failures >= self._max_consecutive_failures:
+                with self._lock:
+                    self._mcp_client = FreeCADMCPClient()
+                    self._connected = False
+
+    async def _ensure_mcp_client(self) -> FreeCADMCPClient:
+        """Return a live MCP client, recreating it if the connection was lost.
+
+        BIP 6.4: The MCP server subprocess can die (OOM, crash, FreeCAD GUI
+        restart). The original client/stio transport becomes stale. This method
+        proactively recreates the client on connection/transport errors.
+        """
+        if self._consecutive_failures >= self._max_consecutive_failures:
+            with self._lock:
+                self._mcp_client = FreeCADMCPClient()
+                self._connected = False
+                self._consecutive_failures = 0
+        return self._mcp_client
+
     def list_tools(self) -> List[Dict[str, Any]]:
         """Fetch and translate tools from the MCP server."""
         async def _fetch():
@@ -113,16 +147,25 @@ class _MCPWorker:
             return [translate_mcp_to_openai(tool) for tool in mcp_tools]
 
         try:
-            return self._submit_async(_fetch())
+            result = self._submit_async(_fetch())
+            self._record_mcp_result(True)
+            return result
         except Exception as e:
+            self._record_mcp_result(False)
             print(f"[FreeCADAdapter] Warning: MCP server unreachable - {e}")
             return []
 
     def execute_tool(self, name: str, args: Dict[str, Any]) -> str:
-        """Execute a tool through the external MCP server client."""
+        """Execute a tool through the external MCP server client with auto-reconnect.
+
+        BIP 6.4: If the MCP server subprocess dies, the stdio transport breaks.
+        This method recreates the client and retries once, so agent-level retries
+        (BIP 6.2) succeed after an MCP server restart.
+        """
         async def _execute():
+            client = await self._ensure_mcp_client()
             await self._connect()
-            result = await self._mcp_client.call_tool(name, args)
+            result = await client.call_tool(name, args)
 
             structured = getattr(result, "structuredContent", None)
             if structured is not None:
@@ -146,9 +189,23 @@ class _MCPWorker:
         try:
             return self._submit_async(_execute())
         except Exception as e:
+            # Check if it's a transport/connection error that warrants reconnection
             import traceback
-            traceback.print_exc()
-            return json.dumps({"success": False, "error": str(e)})
+            error_str = str(e).lower()
+            transport_errors = ("connection", "stdio", "transport", "broken pipe",
+                                "eof", "closed", "reset", "refused")
+            if any(t in error_str for t in transport_errors):
+                self._record_mcp_result(False)
+                # Retry once with fresh client
+                try:
+                    return self._submit_async(_execute())
+                except Exception as e2:
+                    self._record_mcp_result(False)
+                    traceback.print_exc()
+                    return json.dumps({"success": False, "error": str(e2)})
+            else:
+                traceback.print_exc()
+                return json.dumps({"success": False, "error": str(e)})
 
 
 # Global worker instance (lazy initialization)
