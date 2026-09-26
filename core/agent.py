@@ -1,5 +1,6 @@
 """PieCAD Core Orchestrator. CAD-agnostic."""
 import json
+import time
 from typing import Any, Dict, List, Optional
 from providers.llm.provider import LLMProvider
 from core.adapters.interfaces import CADAdapter
@@ -14,6 +15,25 @@ from core.context import (
 )
 from core.intent import IntentClassifier
 from core.tool_registry import get_global_registry, infer_capability_from_schema
+
+# Transient LLM/transport exception types. Imported defensively so the core
+# remains provider-independent: if the openai SDK is unavailable, we fall back
+# to a message-based classification (see _is_transient_llm_error).
+try:  # pragma: no cover - import surface depends on installed SDK
+    from openai import (
+        APIConnectionError as _OpenAIAPIConnectionError,
+        APITimeoutError as _OpenAIAPITimeoutError,
+        RateLimitError as _OpenAIRateLimitError,
+        InternalServerError as _OpenAIInternalServerError,
+    )
+    _OPENAI_TRANSIENT_EXC: tuple = (
+        _OpenAIAPIConnectionError,
+        _OpenAIAPITimeoutError,
+        _OpenAIRateLimitError,
+        _OpenAIInternalServerError,
+    )
+except Exception:  # pragma: no cover
+    _OPENAI_TRANSIENT_EXC = ()
 
 # ARCHITECTURE RULE - Object Identity: Property change on an unconsumed object -> set_param in place; Topology change -> new feature object, old one is auto-hidden (Ghost).
 
@@ -117,6 +137,10 @@ REACT_LOOP_INJECTION = """You are in a multi-step ReAct loop. DO NOT output conv
 class CADAgent:
     MAX_RETRIES = 3
     MAX_STEPS = 15
+    # Bounded retry budget for transient LLM/provider transport failures.
+    MAX_LLM_RETRIES = 2
+    # Base backoff (seconds) between LLM retries; doubled per attempt.
+    LLM_RETRY_BACKOFF = 0.5
 
     def __init__(
         self,
@@ -170,6 +194,73 @@ class CADAgent:
             "cannot reach", "cannot connect",
         ]
         return any(ind in msg for ind in transient_indicators)
+
+    def _is_transient_llm_error(self, error: Exception) -> bool:
+        """Return True if ``error`` is a transient LLM/provider transport failure.
+
+        Transient failures (connection drops, timeouts, rate limits, HTTP 5xx)
+        are worth a bounded retry. Deterministic 4xx errors (bad request, auth,
+        not found, unprocessable) are NOT retried because retrying cannot help
+        and would only waste budget.
+        """
+        # Type-based classification when the openai SDK surface is available.
+        if _OPENAI_TRANSIENT_EXC and isinstance(error, _OPENAI_TRANSIENT_EXC):
+            return True
+
+        # Message-based fallback (provider-independent / SDK missing / wrapped).
+        msg = str(error).lower()
+        transient_indicators = [
+            "timeout", "timed out", "connection", "connection reset",
+            "connection aborted", "connection lost", "temporarily unavailable",
+            "rate limit", "too many requests", "429",
+            "internal server error", "bad gateway", "service unavailable",
+            "gateway timeout", "500", "502", "503", "504",
+            "overloaded", "server error",
+        ]
+        if any(ind in msg for ind in transient_indicators):
+            return True
+
+        # Unknown/unclassified errors are treated as NON-transient so genuine
+        # programming errors surface via the caller's except block rather than
+        # being retried and masked. Only explicitly recognised transient
+        # indicators (above) are retried.
+        return False
+
+    def _generate_with_retry(
+        self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]
+    ) -> Any:
+        """Call the provider with bounded retry for transient transport errors.
+
+        Returns the provider response on success, or ``None`` if all attempts
+        were exhausted by transient errors. Non-transient provider errors
+        propagate unchanged (they are handled by the caller's ``except`` block).
+        """
+        last_error: Optional[Exception] = None
+        for attempt in range(self.MAX_LLM_RETRIES + 1):
+            try:
+                return self.provider.generate_with_tools(
+                    messages=messages, tools=tools
+                )
+            except Exception as e:
+                if not self._is_transient_llm_error(e):
+                    raise
+                last_error = e
+                if attempt < self.MAX_LLM_RETRIES:
+                    backoff = self.LLM_RETRY_BACKOFF * (2 ** attempt)
+                    print(
+                        f"[Retry] LLM call attempt {attempt + 1} failed with "
+                        f"transient error: {e}. Retrying in {backoff:.1f}s...")
+                    try:
+                        time.sleep(backoff)
+                    except Exception:
+                        pass
+                    continue
+                # Exhausted retries.
+                print(
+                    f"\033[91m[ERROR] LLM call failed after "
+                    f"{self.MAX_LLM_RETRIES + 1} attempts: {last_error}\033[0m")
+                return None
+        return None
 
     # ------------------------------------------------------------------ #
     # Context Engine integration (BIP 4.2)
@@ -318,11 +409,52 @@ class CADAgent:
             messages = [{"role": "system", "content": dynamic_system}
                         ] + compiled.conversation + scratchpad
 
-            # 6. Get intent from LLM
+            # 6. Get intent from LLM.
+            #    Transient provider/transport failures (connection drops,
+            #    timeouts, rate limits, HTTP 5xx) are retried with bounded
+            #    backoff inside _generate_with_retry. If retries are exhausted,
+            #    the turn degrades gracefully (structured completion) instead of
+            #    letting the provider exception crash the whole turn.
             print(f"[Agent] Calling LLM with {len(tools)} tools available...")
-            response = self.provider.generate_with_tools(
-                messages=messages, tools=tools
-            )
+            try:
+                response = self._generate_with_retry(messages, tools)
+            except Exception as e:
+                # Non-transient provider error (e.g. bad request/auth): never
+                # silently reinterpreted as success.
+                fail_msg = (
+                    f"LLM request failed: {type(e).__name__}: {e}"
+                )
+                print(f"\033[91m[ERROR] {fail_msg}\033[0m")
+                self.history.append({"role": "assistant", "content": fail_msg})
+                self.conversation.add_assistant(fail_msg)
+                if self._capture_trace:
+                    self._trace.append({
+                        "step": step + 1,
+                        "type": "llm_error",
+                        "error": fail_msg,
+                        "termination_reason": "llm_error",
+                    })
+                return fail_msg, session_tools
+
+            if response is None:
+                # All transient retries exhausted: degrade gracefully rather
+                # than raising out of the ReAct loop.
+                fail_msg = (
+                    "LLM provider unavailable after retries; unable to complete "
+                    "the request. The CAD state was not modified by this step."
+                )
+                print(f"\033[91m[ERROR] {fail_msg}\033[0m")
+                self.history.append({"role": "assistant", "content": fail_msg})
+                self.conversation.add_assistant(fail_msg)
+                if self._capture_trace:
+                    self._trace.append({
+                        "step": step + 1,
+                        "type": "llm_unavailable",
+                        "message": fail_msg,
+                        "termination_reason": "llm_transient_exhausted",
+                    })
+                return fail_msg, session_tools
+
             # Exact provider-reported token usage (None when a provider does not
             # report usage, or for stubs that do not expose last_usage).
             provider_usage = getattr(self.provider, "last_usage", None)
