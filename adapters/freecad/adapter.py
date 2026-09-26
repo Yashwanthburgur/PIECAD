@@ -286,6 +286,29 @@ class FreeCADAdapter(CADAdapter):
             self._record_proxy_result(True)
             return result
 
+    def _call_proxy_with_timeout(self, method_name: str, timeout: float, *args, **kwargs) -> Any:
+        """Call a proxy method with a timeout.
+
+        BIP 6.6: Execute the XML-RPC call in a thread pool with a timeout.
+        If the call exceeds the timeout, it's cancelled and a RuntimeError is raised.
+        This prevents the agent from hanging indefinitely on slow/frozen bridge operations.
+        """
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
+        def _call():
+            return self._call_proxy(method_name, *args, **kwargs)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_call)
+            try:
+                return future.result(timeout=timeout)
+            except FuturesTimeoutError:
+                # Cancel the future (best effort; underlying XML-RPC call continues in background)
+                future.cancel()
+                raise RuntimeError(
+                    f"XML-RPC call '{method_name}' timed out after {timeout:.1f}s."
+                )
+
     # ------------------------------------------------------------------ #
     # External MCP tool execution (synchronous wrapper over the async client)
     # ------------------------------------------------------------------ #
@@ -606,6 +629,9 @@ class FreeCADAdapter(CADAdapter):
         corresponding method on the bridge proxy. The bridge returns a
         human-readable confirmation string which is passed back to the agent.
         """
+        # BIP 6.6: Extract per-call timeout (default 120s)
+        timeout = kwargs.pop("_timeout", 120.0)
+
         # Sanitize tool name (e.g., 'cylinder.op' -> 'cylinder')
         tool_name = tool_name.split('.')[0]
 
@@ -720,8 +746,8 @@ class FreeCADAdapter(CADAdapter):
                 tool_id = kwargs["tool_id"]
 
                 return str(
-                    self._call_proxy(
-                        "boolean",
+                    self._call_proxy_with_timeout(
+                        "boolean", timeout,
                         str(mode),
                         str(target_id),
                         str(tool_id),

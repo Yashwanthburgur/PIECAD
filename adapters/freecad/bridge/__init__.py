@@ -568,7 +568,20 @@ def install_main_thread_processor(interval_ms=50):
 # --------------------------------------------------------------------------- #
 
 
+# BIP 6.6: Default execution timeout (seconds) for main-thread operations.
+# Can be overridden per-call via _execute_on_main_thread(..., _timeout=X).
+_DEFAULT_EXECUTION_TIMEOUT = 120.0
+
+
 def _execute_on_main_thread(op_name, *args, **kwargs):
+    """Execute an operation on the FreeCAD main thread with timeout.
+
+    BIP 6.6: Long-running operations (large booleans, mesh repairs, STEP imports)
+    can hang the main thread indefinitely. This adds a bounded wait with timeout.
+    """
+    # Extract optional timeout (not passed to the operation)
+    timeout = kwargs.pop("_timeout", _DEFAULT_EXECUTION_TIMEOUT)
+
     req_id = uuid.uuid4().hex
     event = threading.Event()
 
@@ -577,7 +590,15 @@ def _execute_on_main_thread(op_name, *args, **kwargs):
 
     _WORK_QUEUE.put((req_id, op_name, args, kwargs))
 
-    event.wait()
+    # Wait with timeout
+    if not event.wait(timeout=timeout):
+        # Timeout: clean up and raise
+        with _RESULTS_LOCK:
+            _RESULTS.pop(req_id, None)
+            _RESULTS_EVENTS.pop(req_id, None)
+        raise RuntimeError(
+            f"Operation '{op_name}' timed out after {timeout:.1f}s on FreeCAD main thread."
+        )
 
     with _RESULTS_LOCK:
         status, payload = _RESULTS.pop(req_id, ("error", "No result produced"))
