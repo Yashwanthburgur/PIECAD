@@ -308,8 +308,11 @@ class FreeCADAdapter(CADAdapter):
         """Call a proxy method with a timeout.
 
         BIP 6.6: Execute the XML-RPC call in a thread pool with a timeout.
-        If the call exceeds the timeout, it's cancelled and a RuntimeError is raised.
+        If the call exceeds the timeout, it's cancelled and a structured error is returned.
         This prevents the agent from hanging indefinitely on slow/frozen bridge operations.
+
+        BIP 6.8: Return structured error JSON instead of raising, so the agent can
+        uniformly detect timeout failures from both FreeCAD and MCP paths.
         """
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
@@ -323,9 +326,13 @@ class FreeCADAdapter(CADAdapter):
             except FuturesTimeoutError:
                 # Cancel the future (best effort; underlying XML-RPC call continues in background)
                 future.cancel()
-                raise RuntimeError(
-                    f"XML-RPC call '{method_name}' timed out after {timeout:.1f}s."
-                )
+                # BIP 6.8: Return structured error JSON for uniform timeout handling
+                return json.dumps({
+                    "success": False,
+                    "error": f"XML-RPC call '{method_name}' timed out after {timeout:.1f}s.",
+                    "error_type": "freecad_timeout",
+                    "timeout_seconds": timeout,
+                })
 
     # ------------------------------------------------------------------ #
     # External MCP tool execution (synchronous wrapper over the async client)

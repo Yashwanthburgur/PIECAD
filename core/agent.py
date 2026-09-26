@@ -266,7 +266,36 @@ class CADAgent:
     # Context Engine integration (BIP 4.2)
     # ------------------------------------------------------------------ #
     def _update_design_state(self, state_json: str) -> None:
-        """Refresh DesignState from the adapter's current CAD state string."""
+        """Refresh DesignState from the adapter's current CAD state string.
+
+        BIP 6.3 — state-integrity guard: when a live state retrieval fails, the
+        ReAct loop substitutes a synthetic empty ``"[]"`` so routing can still
+        proceed. That sentinel must NOT be ingested as an authoritative empty
+        document: doing so clears the preserved last-known-good objects and
+        flips ``state_available`` back to True, destroying the very "preserve
+        last known-good state" invariant the retrieval-error path relies on.
+
+        A JSON string that parses to an empty object list while the caller has
+        signalled unavailability is rejected here. We only treat an empty list
+        as authoritative when the state is currently marked available (i.e. an
+        adapter genuinely reported an empty document).
+        """
+        try:
+            parsed = json.loads(state_json) if isinstance(
+                state_json, str) else state_json
+        except (json.JSONDecodeError, TypeError):
+            # Malformed state: let update_from_cad_state flag it unavailable
+            # (it preserves objects) rather than raising here.
+            self.design_state.update_from_cad_state(state_json)
+            return
+
+        is_empty_list = parsed == []
+        if is_empty_list and not self.design_state.state_available:
+            # Synthetic fallback after a retrieval failure: do not overwrite
+            # preserved state. Re-assert unavailability/staleness instead.
+            self.design_state.mark_state_unavailable()
+            return
+
         self.design_state.update_from_cad_state(state_json)
 
     def _record_tool_outcome(self, name: str, args: dict, success: bool,
@@ -341,6 +370,7 @@ class CADAgent:
             print(f"[Agent] Step {step+1}: {len(all_tools)} tools available")
 
             # 2. Get current CAD state
+            state_retrieval_failed = False
             try:
                 state_json = self.adapter.get_state()
             except Exception as e:
@@ -350,12 +380,21 @@ class CADAgent:
                 # Continue with an empty state for router gating; the compiler will
                 # see state_available=false and can expose the stale summary.
                 state_json = "[]"
+                state_retrieval_failed = True
 
             # 2a. Parse state into objects for router-based tool gating.
-            try:
-                state_objects = json.loads(state_json)
-            except (json.JSONDecodeError, TypeError):
-                state_objects = []
+            #     On a transient retrieval failure, gate the router from the
+            #     PRESERVED last-known-good DesignState rather than the synthetic
+            #     empty payload, so a state blip does not strip tools for objects
+            #     that still exist in the preserved state.
+            if state_retrieval_failed and self.design_state.objects:
+                state_objects = [o.to_dict(minimal=True)
+                                 for o in self.design_state.objects.values()]
+            else:
+                try:
+                    state_objects = json.loads(state_json)
+                except (json.JSONDecodeError, TypeError):
+                    state_objects = []
 
             # 2b. Sync registry with current tool schemas (infers capabilities for new tools)
             self.router.sync_registry(all_tools)
@@ -604,6 +643,27 @@ class CADAgent:
                     attempts = attempt + 1
                     try:
                         out = self.adapter.execute_command(name, **args)
+                        # BIP 6.8: Check if the returned result is a structured error (e.g., timeout).
+                        # Both FreeCAD timeout (BIP 6.6) and MCP timeout (BIP 6.7) return JSON
+                        # with error_type. This must NOT be treated as success.
+                        if isinstance(out, str):
+                            try:
+                                parsed = json.loads(out)
+                                if isinstance(parsed, dict) and parsed.get("success") is False:
+                                    error = RuntimeError(parsed.get(
+                                        "error", "Tool execution failed"))
+                                    # Detect timeout errors specifically
+                                    error_type = parsed.get("error_type", "")
+                                    if "timeout" in error_type.lower():
+                                        transient = True  # timeout is transient for retry purposes
+                                    else:
+                                        transient = self._is_transient_error(
+                                            error)
+                                    success = False
+                                    break
+                            except (json.JSONDecodeError, TypeError):
+                                # Not JSON or not a structured error - treat as success
+                                pass
                         success = True
                         break
                     except (ConnectionError, OSError) as e:
