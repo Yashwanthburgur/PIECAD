@@ -29,8 +29,9 @@ change.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from .budget import ContextBudget
 from .conversation import ConversationContext
@@ -133,7 +134,11 @@ class ContextCompiler:
         )
 
     def _select_state(
-        self, design_state: Optional[DesignState], plan: ContextPlan
+        self,
+        design_state: Optional[DesignState],
+        plan: ContextPlan,
+        conversation: Optional[ConversationContext] = None,
+        user_message: str = ""
     ) -> Dict[str, Any]:
         if design_state is None:
             return {"selected": [], "objects": []}
@@ -154,7 +159,8 @@ class ContextCompiler:
         # Trim to budget (estimated tokens).
         if self.budget.state_budget is not None:
             trimmed = self._trim_object_list(
-                view["objects"], self.budget.state_budget)
+                view["objects"], self.budget.state_budget,
+                conversation=conversation, user_message=user_message)
             if len(trimmed) < len(view["objects"]):
                 self.budget.note_dropped("state_objects_overflow")
             view["objects"] = trimmed
@@ -276,7 +282,9 @@ class ContextCompiler:
         system_prefix: Optional[str] = None,
     ) -> CompiledContext:
         t0 = monotonic_ms()
-        self.budget = ContextBudget()
+        # Preserve existing budget if already configured (e.g., by tests)
+        if not hasattr(self, 'budget') or self.budget is None:
+            self.budget = ContextBudget()
 
         # 1. requirements
         plan = self._determine_requirements(
@@ -285,7 +293,9 @@ class ContextCompiler:
         )
 
         # 2. state
-        state = self._select_state(design_state, plan)
+        state = self._select_state(design_state, plan,
+                                   conversation=conversation_context,
+                                   user_message=user_message)
 
         # 3. memory
         memory = self._select_memory(session_memory, plan, user_message)
@@ -367,7 +377,9 @@ class ContextCompiler:
                     # Trim state objects from the end
                     if "objects" in state:
                         state["objects"] = self._trim_object_list(state["objects"],
-                                                                  max(0, section_est - trim_amount))
+                                                                  max(0, section_est -
+                                                                      trim_amount),
+                                                                  conversation=conversation_context, user_message=user_message)
                     self.budget.note_dropped("state_objects_overflow")
                 elif section_name == "memory":
                     # Trim memory by reducing entries
@@ -439,28 +451,107 @@ class ContextCompiler:
             name = schema.get("name") if isinstance(schema, dict) else None
         return str(name).strip().lower() if name else ""
 
+    def _extract_referenced_objects(
+            self,
+            conversation: Optional[ConversationContext],
+            user_message: str,
+            max_turns: int = 3) -> set:
+        """Extract object IDs explicitly referenced in recent user turns.
+
+        BIP 10.1: Identify objects explicitly mentioned in the most recent
+        2-3 user turns so they can be prioritized during state truncation.
+
+        Returns:
+            Set of object IDs that should be prioritized.
+        """
+        if not conversation:
+            return set()
+
+        referenced = set()
+        # Get recent user turns (skip the current message which is in user_message)
+        recent_turns = conversation.recent_turns(max_turns + 1)
+        # Filter to user turns only, excluding the current turn if it's a user turn
+        user_turns = [t for t in recent_turns if t.role == "user"]
+        # Include the current user message as the most recent
+        all_user_texts = [user_message] + [t.content for t in user_turns[:-1]]
+        # Limit to max_turns most recent user turns
+        all_user_texts = all_user_texts[:max_turns]
+
+        # Object ID patterns: alphanumeric with underscores, typically like
+        # box1, fillet1, cut1, tool_cyl, hole1_drill, etc.
+        import re
+        # Match typical object ID patterns: word chars + digits, not just numbers
+        obj_pattern = re.compile(r'\b([a-zA-Z_][a-zA-Z0-9_]*\d+)\b')
+
+        for text in all_user_texts:
+            if not text:
+                continue
+            matches = obj_pattern.findall(text)
+            for match in matches:
+                # Filter out common non-object words that match the pattern
+                if len(match) >= 2 and not match.isdigit():
+                    referenced.add(match)
+
+        return referenced
+
     def _trim_object_list(
-        self, objects: List[Dict[str, Any]], budget_tokens: int
-    ) -> List[Dict[str, Any]]:
+            self,
+            objects: List[Dict[str, Any]],
+            budget_tokens: int,
+            conversation: Optional[ConversationContext] = None,
+            user_message: str = "") -> List[Dict[str, Any]]:
         """Trim a list of object dicts down to an estimated token budget.
 
+        BIP 10.1: Prioritize objects explicitly referenced in recent user turns
+        over purely recency-based truncation.
+
         This does NOT drop the *selected* objects first — it trims from the end
-        (which are the relationship-expansion neighbours), keeping the key target.
+        (which are the relationship-expansion neighbours), keeping the key target
+        AND any objects explicitly referenced in recent user turns.
         """
         if budget_tokens is None or budget_tokens <= 0:
             return objects
         total = estimate_tokens(json.dumps(objects, default=str))
         if total <= budget_tokens:
             return objects
+
+        # BIP 10.1: Identify priority objects from recent user references
+        priority_ids = set()
+        if conversation and user_message:
+            priority_ids = self._extract_referenced_objects(
+                conversation, user_message, max_turns=3)
+
         kept: List[Dict[str, Any]] = []
         running = 0
-        # Preserve the earliest (target) objects, drop the tail expansion.
+
+        # First pass: keep priority objects (referenced in recent turns)
+        priority_objects = []
+        other_objects = []
         for obj in objects:
+            obj_id = obj.get("id", "")
+            if obj_id in priority_ids:
+                priority_objects.append(obj)
+            else:
+                other_objects.append(obj)
+
+        # Add priority objects first (they are budget-protected)
+        for obj in priority_objects:
+            cost = estimate_tokens(json.dumps(obj, default=str))
+            if running + cost > budget_tokens:
+                # Even priority objects can't exceed budget, but we try
+                break
+            kept.append(obj)
+            running += cost
+
+        # Second pass: add remaining objects in original order (preserves
+        # earliest/target objects) until budget exhausted
+        for obj in other_objects:
             cost = estimate_tokens(json.dumps(obj, default=str))
             if running + cost > budget_tokens:
                 break
             kept.append(obj)
             running += cost
+
         return kept
 
     def _trim_tool_list(
