@@ -400,6 +400,48 @@ class DesignState:
         sig_key = f"{object_id}:{ref_type}:{ref_id}:signature"
         return self.derived_facts.get(sig_key)
 
+    def require_valid_topology_reference(
+            self,
+            object_id: str,
+            ref_type: str,
+            ref_id: str,
+            current_signature: Dict[str, Any],
+            tolerance: float = 1e-6) -> None:
+        """Validate a stored topology reference and raise StaleTopologyError on mismatch.
+
+        BIP 9.3: When a stored face/edge reference is resolved, its stored
+        geometric signature is re-checked against the current geometry. If the
+        signature no longer matches (geometry changed after recompute or a
+        topology-changing operation), this raises StaleTopologyError so the
+        caller NEVER silently resolves or continues using the stale reference.
+
+        Args:
+            object_id: The target object ID
+            ref_type: "edge" or "face"
+            ref_id: The specific reference ID
+            current_signature: Current geometric signature from the CAD kernel
+            tolerance: Float comparison tolerance
+
+        Raises:
+            StaleTopologyError: If the stored signature mismatches the current
+                geometry. Details identify which fields differ.
+        """
+        from .topology_errors import StaleTopologyError
+
+        result = self.validate_topology_signature(
+            object_id, ref_type, ref_id, current_signature, tolerance)
+        if not result["match"]:
+            raise StaleTopologyError(
+                f"Topology signature mismatch for {ref_type} reference "
+                f"'{ref_id}' on '{object_id}': {result['mismatch_details']}. "
+                f"You must re-query topology (get_faces/get_edges) to get "
+                f"updated references.",
+                object_id=object_id,
+                ref_type=ref_type,
+                ref_id=ref_id,
+                details=result["mismatch_details"],
+            )
+
     def update_from_tool_result(
         self,
         tool: str,

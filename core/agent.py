@@ -12,6 +12,7 @@ from core.context import (
     ConversationContext,
     DesignState,
     SessionMemory,
+    StaleTopologyError,
 )
 from core.intent import IntentClassifier
 from core.tool_registry import get_global_registry, infer_capability_from_schema
@@ -174,6 +175,13 @@ class CADAgent:
         self.session_memory = SessionMemory()
         self.conversation = ConversationContext(default_recent_window=4)
         self.compiler = ContextCompiler()
+
+        # BIP 9.3: Wire the DesignState into the adapter (if it supports the
+        # optional signature-validation hook) so the adapter can raise
+        # StaleTopologyError when a stored face/edge signature no longer
+        # matches the live geometry.
+        if hasattr(self.adapter, "design_state"):
+            self.adapter.design_state = self.design_state
 
         # Telemetry for the most recent LLM call(s). Accessible for observability
         # without dumping large payloads into normal logs.
@@ -1130,16 +1138,33 @@ class CADAgent:
                         error = RuntimeError(
                             f"Execution error on {name}: unknown error after retries")
                     error_msg = str(error)
+
+                    # BIP 9.3: Classify stale-topology failures distinctly.
+                    # StaleTopologyError (or a bridge message naming stale
+                    # topology references) means the face/edge reference no
+                    # longer matches live geometry. This is NOT retried
+                    # blindly: fresh topology is re-queried below so the next
+                    # reasoning step can use a fresh reference.
+                    is_stale_topology = (
+                        isinstance(error, StaleTopologyError)
+                        or ("stale" in error_msg.lower()
+                            and ("topology" in error_msg.lower()
+                                 or "reference" in error_msg.lower()))
+                    )
+
                     print(
                         f"\033[91m[ERROR] Step {step+1}: Tool '{name}' failed: {error_msg}\033[0m")
                     results.append(json.dumps({
                         "status": "error",
                         "tool": name,
-                        "error_type": type(error).__name__,
+                        "error_type": ("StaleTopologyError"
+                                       if is_stale_topology
+                                       else type(error).__name__),
                         "error": error_msg,
                         "arguments": args,
                         "transient": transient,
                         "retries": attempts - 1,
+                        "stale_topology": is_stale_topology,
                     }, default=str))
                     # Release mutation gate on non-timeout failure
                     if is_mutation and gate_acquired and not transient:
@@ -1149,6 +1174,54 @@ class CADAgent:
                     # unresolved barrier is maintained by the OperationRegistry.
                     if is_mutation and gate_acquired and transient:
                         self._mutation_gate.release(operation_id)
+
+                    # BIP 9.3: After a stale-topology failure, automatically
+                    # re-query fresh topology using the EXISTING get_edges /
+                    # get_faces capability so the subsequent reasoning step can
+                    # use a fresh reference. The ORIGINAL stale tool arguments
+                    # are NOT retried.
+                    if is_stale_topology:
+                        stale_target = target
+                        stale_ref_type = "edge"
+                        if isinstance(error, StaleTopologyError):
+                            stale_ref_type = error.ref_type or "edge"
+                        else:
+                            # Bridge-level stale message: infer ref type from
+                            # the tool that failed.
+                            if name in ("get_faces", "shell", "sketch"):
+                                stale_ref_type = "face"
+                        if stale_target:
+                            try:
+                                refresh_tool = ("get_edges"
+                                                if stale_ref_type == "edge"
+                                                else "get_faces")
+                                fresh_json = self.adapter.execute_command(
+                                    refresh_tool, object_name=stale_target)
+                                self.design_state.update_from_tool_result(
+                                    tool=refresh_tool,
+                                    result=fresh_json,
+                                    target_id=stale_target,
+                                    args={"object_name": stale_target},
+                                    success=True,
+                                )
+                                print(
+                                    f"[Agent] Stale topology detected for "
+                                    f"'{stale_target}'; re-queried fresh "
+                                    f"topology via {refresh_tool}.")
+                                if self._capture_trace:
+                                    self._trace.append({
+                                        "step": step + 1,
+                                        "type": "stale_topology_requery",
+                                        "tool": name,
+                                        "target": stale_target,
+                                        "refresh_tool": refresh_tool,
+                                    })
+                            except Exception as re_err:
+                                # Re-query is best-effort; the stale error is
+                                # still returned to the LLM for reasoning.
+                                print(
+                                    f"[Agent] Warning: stale-topology re-query "
+                                    f"failed for '{stale_target}': {re_err}")
 
                 # Record trace entry if capture_trace is enabled
                 if self._capture_trace:

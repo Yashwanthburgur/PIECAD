@@ -260,6 +260,77 @@ class FreeCADAdapter(CADAdapter):
         # to avoid tight reconnection loops.
         self._consecutive_failures: int = 0
         self._max_consecutive_failures: int = 3
+        # BIP 9.3: Optional DesignState hook for topology-signature validation.
+        # Set by the agent/core so the adapter can validate stored edge
+        # signatures before executing fillet/chamfer. Kept optional so the
+        # adapter remains usable standalone.
+        self.design_state = None
+
+    def _validate_stored_edge_signatures(self, target_id: str,
+                                         edge_refs: list) -> None:
+        """BIP 9.3: Validate stored edge signatures against live geometry.
+
+        For each stored signature (captured by get_edges via DesignState), the
+        current geometry is re-queried and compared. A mismatch raises
+        StaleTopologyError so the caller must re-query topology instead of
+        silently using a stale reference.
+
+        This is best-effort infrastructure: it runs only when a DesignState
+        hook is present and stored signatures exist. CAD-specific geometry
+        extraction happens here (adapter/bridge boundary).
+        """
+        if not self.design_state or not edge_refs:
+            return
+        # Only validate refs that actually have a stored signature.
+        stored_any = any(
+            self.design_state.get_stored_signature(target_id, "edge",
+                                                   str(ref)) is not None
+            for ref in edge_refs
+        )
+        if not stored_any:
+            return
+
+        from core.context.topology_errors import StaleTopologyError
+
+        try:
+            edges_result = self._call_proxy("get_edges", str(target_id))
+            parsed = json.loads(edges_result) if isinstance(
+                edges_result, str) else edges_result
+            if not isinstance(parsed, dict):
+                return
+            current_by_id = {
+                str(e.get("edge_id")): e
+                for e in parsed.get("edges", [])
+                if isinstance(e, dict) and e.get("edge_id")
+            }
+        except Exception:
+            # Live re-query failed: leave validation to the bridge's existing
+            # topology-version check rather than fabricating a failure.
+            return
+
+        for ref in edge_refs:
+            ref_id = str(ref)
+            stored = self.design_state.get_stored_signature(
+                target_id, "edge", ref_id)
+            if stored is None:
+                continue
+            current = current_by_id.get(ref_id)
+            if current is None:
+                # Reference no longer exists in live topology at all.
+                raise StaleTopologyError(
+                    f"Edge reference '{ref_id}' no longer exists in the live "
+                    f"topology of '{target_id}'. You must call get_edges again "
+                    f"to get updated references.",
+                    object_id=target_id, ref_type="edge", ref_id=ref_id,
+                    details=["reference_missing_in_live_topology"],
+                )
+            current_signature = {
+                "center": current.get("center", {}),
+                "length": current.get("length"),
+                "tangent": current.get("tangent", {}),
+            }
+            self.design_state.require_valid_topology_reference(
+                target_id, "edge", ref_id, current_signature)
 
     def _ensure_proxy(self) -> xmlrpc.client.ServerProxy:
         """Return a live XML-RPC proxy, recreating it if the connection was lost.
@@ -979,6 +1050,10 @@ class FreeCADAdapter(CADAdapter):
                 # BIP 4.3.4: Pass topology version for edge_refs validation
                 # The DesignState tracks topology versions; we retrieve it here.
                 topology_version = kwargs.get("topology_version", 0)
+                # BIP 9.3: Validate stored edge signatures before executing.
+                # A mismatch raises StaleTopologyError so the Agent recovery
+                # loop re-queries get_edges instead of blindly retrying.
+                self._validate_stored_edge_signatures(target_id, edge_refs)
                 return str(
                     self._call_proxy(
                         "fillet",
@@ -997,6 +1072,8 @@ class FreeCADAdapter(CADAdapter):
                 size = float(kwargs["size"])
                 # BIP 4.3.4: Pass topology version for edge_refs validation
                 topology_version = kwargs.get("topology_version", 0)
+                # BIP 9.3: Validate stored edge signatures before executing.
+                self._validate_stored_edge_signatures(target_id, edge_refs)
                 return str(
                     self._call_proxy(
                         "chamfer",
