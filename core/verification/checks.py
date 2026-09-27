@@ -7,7 +7,58 @@ and contain zero CAD-system-specific terminology or imports.
 """
 
 import json
-from typing import List, Dict, Any
+import math
+from typing import List, Dict, Any, Tuple
+
+
+class _Vector3:
+    """Simple 3D vector for CAD-agnostic geometric calculations."""
+
+    __slots__ = ("x", "y", "z")
+
+    def __init__(self, x: float = 0.0, y: float = 0.0, z: float = 0.0):
+        self.x = float(x)
+        self.y = float(y)
+        self.z = float(z)
+
+    def __sub__(self, other: "_Vector3") -> "_Vector3":
+        return _Vector3(self.x - other.x, self.y - other.y, self.z - other.z)
+
+    def __add__(self, other: "_Vector3") -> "_Vector3":
+        return _Vector3(self.x + other.x, self.y + other.y, self.z + other.z)
+
+    def dot(self, other: "_Vector3") -> float:
+        return self.x * other.x + self.y * other.y + self.z * other.z
+
+    def cross(self, other: "_Vector3") -> "_Vector3":
+        return _Vector3(
+            self.y * other.z - self.z * other.y,
+            self.z * other.x - self.x * other.z,
+            self.x * other.y - self.y * other.x,
+        )
+
+    def multiply(self, scalar: float) -> "_Vector3":
+        return _Vector3(self.x * scalar, self.y * scalar, self.z * scalar)
+
+    @property
+    def Length(self) -> float:
+        return math.sqrt(self.x ** 2 + self.y ** 2 + self.z ** 2)
+
+    def normalize(self) -> None:
+        length = self.Length
+        if length > 0:
+            self.x /= length
+            self.y /= length
+            self.z /= length
+
+
+def _parse_vec(data: Dict[str, float], default: float = 0.0) -> _Vector3:
+    """Parse a dict with x, y, z keys into a _Vector3."""
+    return _Vector3(
+        float(data.get("x", default)),
+        float(data.get("y", default)),
+        float(data.get("z", default)),
+    )
 
 
 class GeometryVerifier:
@@ -137,6 +188,122 @@ class GeometryVerifier:
             return (x_span <= max_x) and (y_span <= max_y) and (z_span <= max_z)
         except (json.JSONDecodeError, KeyError, TypeError):
             return False
+
+    @staticmethod
+    def verify_mate_coincident(moving_face_json: str, fixed_face_json: str,
+                               tolerance: float = 1e-3) -> Tuple[bool, str]:
+        """
+        Verify that a coincident mate actually produced coplanar, opposing faces.
+
+        Args:
+            moving_face_json: JSON from get_faces on the moving object's mated face.
+                Expected format: {"face_id": str, "center": {"x": float, "y": float, "z": float},
+                                  "normal": {"x": float, "y": float, "z": float}, "area": float}
+            fixed_face_json: JSON from get_faces on the fixed object's mated face.
+                Same format as moving_face_json.
+            tolerance: Maximum allowed deviation (mm) for coplanarity check.
+
+        Returns:
+            A tuple ``(bool, reason)``. True if faces are coplanar with opposing normals
+            within tolerance, False otherwise with specific reason.
+        """
+        try:
+            moving = json.loads(moving_face_json)
+            fixed = json.loads(fixed_face_json)
+        except (json.JSONDecodeError, TypeError) as e:
+            return False, f"face JSON did not parse: {e}"
+
+        if not isinstance(moving, dict) or not isinstance(fixed, dict):
+            return False, "face data was not dicts"
+
+        # Extract centers and normals
+        try:
+            m_center = moving.get("center", {})
+            f_center = fixed.get("center", {})
+            m_normal = moving.get("normal", {})
+            f_normal = fixed.get("normal", {})
+
+            m_c = _parse_vec(m_center)
+            f_c = _parse_vec(f_center)
+            m_n = _parse_vec(m_normal)
+            f_n = _parse_vec(f_normal)
+        except Exception:
+            return False, "invalid center/normal data"
+
+        # Check normals are opposing (dot product ≈ -1)
+        if abs(m_n.Length - 1.0) > 1e-6:
+            m_n.normalize()
+        if abs(f_n.Length - 1.0) > 1e-6:
+            f_n.normalize()
+
+        dot = m_n.dot(f_n)
+        if dot > -0.9999:  # Should be ≈ -1 for opposing faces
+            return False, f"face normals not opposing (dot={dot:.4f})"
+
+        # Check coplanarity: distance from moving face center to fixed face plane
+        plane_dist = abs((m_c - f_c).dot(f_n))
+        if plane_dist > tolerance:
+            return False, f"faces not coplanar (distance={plane_dist:.6f} > {tolerance})"
+
+        return True, f"coincident mate verified (distance={plane_dist:.6f})"
+
+    @staticmethod
+    def verify_mate_concentric(moving_edge_json: str, fixed_edge_json: str,
+                               tolerance: float = 1e-3) -> Tuple[bool, str]:
+        """
+        Verify that a concentric mate actually produced coaxial cylinders.
+
+        Args:
+            moving_edge_json: JSON from get_edges on the moving object's mated edge.
+                Expected format: {"edge_id": str, "center": {"x": float, "y": float, "z": float},
+                                  "axis": {"x": float, "y": float, "z": float}, "length": float}
+            fixed_edge_json: JSON from get_edges on the fixed object's mated edge.
+                Same format as moving_edge_json.
+            tolerance: Maximum allowed deviation (mm) for axis alignment and center offset.
+
+        Returns:
+            A tuple ``(bool, reason)``. True if edges are coaxial within tolerance,
+            False otherwise with specific reason.
+        """
+        try:
+            moving = json.loads(moving_edge_json)
+            fixed = json.loads(fixed_edge_json)
+        except (json.JSONDecodeError, TypeError) as e:
+            return False, f"edge JSON did not parse: {e}"
+
+        if not isinstance(moving, dict) or not isinstance(fixed, dict):
+            return False, "edge data was not dicts"
+
+        # Extract centers and axes
+        try:
+            m_center = moving.get("center", {})
+            f_center = fixed.get("center", {})
+            m_axis = moving.get("axis", {})
+            f_axis = fixed.get("axis", {})
+
+            m_c = _parse_vec(m_center)
+            f_c = _parse_vec(f_center)
+            m_a = _parse_vec(m_axis)
+            f_a = _parse_vec(f_axis)
+        except Exception:
+            return False, "invalid center/axis data"
+
+        # Check axes are parallel (cross product length ≈ 0)
+        cross_len = m_a.cross(f_a).Length
+        if cross_len > tolerance:
+            return False, f"axes not parallel (cross={cross_len:.6f} > {tolerance})"
+
+        # Check centers are aligned along axis (perpendicular distance ≈ 0)
+        # Vector between centers
+        center_diff = m_c - f_c
+        # Project onto axis
+        axis_proj = center_diff.dot(f_a)
+        perp_dist = (center_diff - f_a.multiply(axis_proj)).Length
+
+        if perp_dist > tolerance:
+            return False, f"centers not aligned (perp_dist={perp_dist:.6f} > {tolerance})"
+
+        return True, f"concentric mate verified (axis_cross={cross_len:.6f}, perp_dist={perp_dist:.6f})"
 
 
 def check_geometry(state_objects: list) -> List[str]:

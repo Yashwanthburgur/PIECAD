@@ -1069,6 +1069,62 @@ class CADAgent:
                                 # Verification error - log but don't fail the operation
                                 print(
                                     f"[VERIFY] Warning: Bounding-box check failed: {e}")
+
+                    # BIP 8.4: Mate verification
+                    # Verify the geometric relationship produced by mate operations
+                    if name == "mate" and success:
+                        mate_type = args.get("mate_type", "").strip().lower()
+                        moving_target = args.get("moving_target")
+                        moving_ref = args.get("moving_ref")
+                        fixed_target = args.get("fixed_target")
+                        fixed_ref = args.get("fixed_ref")
+                        if moving_target and moving_ref and fixed_target and fixed_ref:
+                            try:
+                                if mate_type == "coincident":
+                                    # Get face data for both mated faces
+                                    moving_face = self.adapter.execute_command(
+                                        "get_faces", object_name=moving_target)
+                                    fixed_face = self.adapter.execute_command(
+                                        "get_faces", object_name=fixed_target)
+                                    ok, reason = GeometryVerifier.verify_mate_coincident(
+                                        moving_face, fixed_face)
+                                elif mate_type == "concentric":
+                                    # Get edge data for both mated edges
+                                    moving_edge = self.adapter.execute_command(
+                                        "get_edges", object_name=moving_target)
+                                    fixed_edge = self.adapter.execute_command(
+                                        "get_edges", object_name=fixed_target)
+                                    ok, reason = GeometryVerifier.verify_mate_concentric(
+                                        moving_edge, fixed_edge)
+                                else:
+                                    ok, reason = True, f"mate type '{mate_type}' not verified (unsupported)"
+
+                                if not ok:
+                                    error_msg = f"Verification failed: {reason}"
+                                    print(
+                                        f"\033[91m[VERIFY] {error_msg}\033[0m")
+                                    # Convert success to failure for the agent recovery loop
+                                    success = False
+                                    results[-1] = json.dumps({
+                                        "status": "error",
+                                        "tool": name,
+                                        "error_type": "GeometryVerificationError",
+                                        "error": error_msg,
+                                        "arguments": args,
+                                        "transient": False,
+                                        "retries": 0,
+                                    }, default=str)
+                                    # Mark operation as failed
+                                    self._operation_registry.fail(
+                                        operation_id, "GeometryVerificationError", error_msg)
+                                    # Release mutation gate since we're treating this as failure
+                                    if is_mutation and gate_acquired:
+                                        self._mutation_gate.release(
+                                            operation_id)
+                            except Exception as e:
+                                # Verification error - log but don't fail the operation
+                                print(
+                                    f"[VERIFY] Warning: Mate verification check failed: {e}")
                 else:
                     if error is None:
                         error = RuntimeError(
