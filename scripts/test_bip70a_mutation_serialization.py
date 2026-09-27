@@ -495,11 +495,12 @@ def test_timeout_compatibility():
     unresolved = agent._operation_registry.get_unresolved()
     assert len(unresolved) == 1, "Box operation should be unresolved"
 
-    # The mutation gate IS physically held after timeout (by design - the lock is kept
-    # to prevent concurrent mutations until reconciliation). The unresolved operation
-    # logically blocks new mutations from acquiring the gate.
-    assert agent._mutation_gate.is_held(
-    ), "Physical lock should be held after timeout (by design)"
+    # The mutation gate PHYSICAL LOCK is released at timeout boundary (correct behavior).
+    # The LOGICAL BARRIER is the unresolved operation in the registry.
+    assert not agent._mutation_gate.is_held(
+    ), "Physical lock should be released at timeout boundary"
+    assert agent._operation_registry.has_any_unresolved(
+    ), "Logical barrier should be active"
 
     # Turn 2: Try to run cylinder - should be blocked by unresolved operation
     with patch.object(agent.provider, 'generate_with_tools') as mock_llm:

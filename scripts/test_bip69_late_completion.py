@@ -3,12 +3,15 @@
 
 Validates that timeout operations are tracked with identity and late completion
 does not corrupt state.
+
+Uses OperationRegistry (BIP 7.0) instead of the old _pending_operations dict.
 """
 
 from providers.llm.provider import LLMProvider
 from core.context.state import DesignState, RecentOperation
 from core.adapters.interfaces import CADAdapter
 from core.agent import CADAgent
+from core.operations import OperationStatus
 import sys
 import json
 from pathlib import Path
@@ -83,6 +86,16 @@ class MockAdapter(CADAdapter):
         self._late_completion_results[operation_id] = result
 
 
+def _get_unresolved_ops(agent):
+    """Helper to get unresolved operations from the OperationRegistry."""
+    return agent._operation_registry.get_unresolved()
+
+
+def _get_unresolved_count(agent):
+    """Helper to get count of unresolved operations."""
+    return len(_get_unresolved_ops(agent))
+
+
 def test_operation_identity():
     """Test A: Each execution gets a unique operation ID."""
     print("Testing A: Operation identity...")
@@ -123,7 +136,7 @@ def test_operation_identity():
 
     # Verify operation ID was generated and tracked
     assert agent._operation_counter == 1
-    assert len(agent._pending_operations) == 0  # No timeout, so not pending
+    assert _get_unresolved_count(agent) == 0  # No timeout, so not unresolved
 
     print("[PASS] test_operation_identity passed")
 
@@ -179,13 +192,14 @@ def test_timeout_marks_unresolved():
     assert len(recent_errors) == 1
     assert "timed out" in recent_errors[0].lower()
 
-    # Verify operation is tracked as pending/unresolved
-    assert len(agent._pending_operations) == 1
-    op_id = list(agent._pending_operations.keys())[0]
-    pending = agent._pending_operations[op_id]
-    assert pending["status"] == "timeout"
-    assert pending["tool"] == "box"
-    assert pending["args"]["id"] == "test_box"
+    # Verify operation is tracked as unresolved
+    assert _get_unresolved_count(agent) == 1
+    op_id = list(_get_unresolved_ops(agent).keys())[0]
+    record = agent._operation_registry.get(op_id)
+    assert record is not None
+    assert record.status == OperationStatus.UNRESOLVED
+    assert record.tool == "box"
+    assert record.args["id"] == "test_box"
 
     # Verify NOT recorded as successful operation
     recent_ops = agent.design_state.get_recent_operations()
@@ -217,17 +231,11 @@ def test_late_completion_protection():
     # We'll manually control the operation IDs
     agent = CADAgent(adapter=adapter, capture_trace=True)
 
-    # Manually add a pending operation to track
+    # Manually add an unresolved operation to track
     op_id = "op_1_box_1"
-    agent._pending_operations[op_id] = {
-        "tool": "box",
-        "args": {"id": "test_box"},
-        "target_id": None,
-        "step": 1,
-        "ts": 0,
-        "status": "timeout",
-        "error_type": "freecad_timeout",
-    }
+    agent._operation_registry.create(op_id, "box", {"id": "test_box"}, None, 1)
+    agent._operation_registry.timeout(
+        op_id, "freecad_timeout", "Simulated timeout")
 
     # State after timeout - box doesn't exist yet
     adapter._state = '[]'
@@ -246,17 +254,28 @@ def test_late_completion_protection():
     agent._update_design_state(late_state)
     agent._check_pending_operations_against_state(json.loads(late_state))
 
-    # Pending should be cleared after late completion detected
-    assert op_id not in agent._pending_operations
+    # Unresolved should be cleared after late completion detected
+    assert _get_unresolved_count(agent) == 0
     # But state should now have the box
     assert "test_box" in agent.design_state.objects
+
+    # Verify reconciliation result
+    record = agent._operation_registry.get(op_id)
+    assert record is not None
+    assert record.status == OperationStatus.RECONCILED
+    assert record.reconciliation_result == "completed"
+    assert record.late_completion_detected is True
 
     print("[PASS] test_late_completion_protection passed")
 
 
 def test_newer_operation_wins():
-    """Test D: Operation A times out, B completes, A's late completion doesn't win."""
-    print("Testing D: Newer operation wins...")
+    """Test D: Operation A times out, B is blocked, A's late completion doesn't win.
+
+    With BIP 7.0B, when A is unresolved, B is blocked at the mutation gate.
+    This is the correct behavior - no concurrent mutations allowed.
+    """
+    print("Testing D: Newer operation blocked by unresolved...")
 
     adapter = MockAdapter()
     adapter._tools = [
@@ -288,7 +307,7 @@ def test_newer_operation_wins():
     })
     adapter.set_tool_result("box", timeout_result)
 
-    # Cylinder succeeds
+    # Cylinder succeeds (but will be blocked by unresolved box)
     adapter.set_tool_result("cylinder", "Successfully created cylinder 'cyl1'")
 
     agent = CADAgent(adapter=adapter, capture_trace=True)
@@ -305,7 +324,7 @@ def test_newer_operation_wins():
         mock_response1.tool_calls = [mock_tool_call1]
         mock_response1.content = None
 
-        # Step 2: cylinder (succeeds)
+        # Step 2: cylinder (BLOCKED by unresolved box)
         mock_tool_call2 = Mock()
         mock_tool_call2.id = "call_2"
         mock_tool_call2.function = Mock()
@@ -325,21 +344,21 @@ def test_newer_operation_wins():
 
         result, tools = agent.handle_message("Create box then cylinder")
 
-    # Both tools should have been called
+    # Box was called
     assert "box" in tools
-    assert "cylinder" in tools
 
-    # Box should be pending (timed out)
-    assert len(agent._pending_operations) == 1
-    op_id = list(agent._pending_operations.keys())[0]
-    assert agent._pending_operations[op_id]["tool"] == "box"
+    # Box should be unresolved (timed out)
+    assert _get_unresolved_count(agent) == 1
+    op_id = list(_get_unresolved_ops(agent).keys())[0]
+    assert agent._operation_registry.get(op_id).tool == "box"
 
-    # Cylinder should be in recent operations
+    # Cylinder should be BLOCKED (not in recent operations)
+    # The LLM requested it but the gate prevented execution
     recent_ops = agent.design_state.get_recent_operations()
-    assert len(recent_ops) == 1
-    assert recent_ops[0].tool == "cylinder"
+    assert len(
+        recent_ops) == 0, "Cylinder mutation should be blocked by unresolved box operation"
 
-    print("[PASS] test_newer_operation_wins passed")
+    print("[PASS] test_newer_operation_wins passed (BIP 7.0B: blocked by unresolved)")
 
 
 def test_recovery_after_timeout():
@@ -413,8 +432,8 @@ def test_recovery_after_timeout():
     assert "box" in tools
     assert "get_state" in tools
 
-    # Pending operation tracked
-    assert len(agent._pending_operations) == 1
+    # Unresolved operation tracked
+    assert _get_unresolved_count(agent) == 1
 
     # State refresh should have been triggered (get_state succeeded)
     assert agent.design_state.state_available is True
@@ -554,8 +573,8 @@ def test_explicit_retry_new_identity():
     # Two separate operation IDs generated
     assert agent._operation_counter == 2
 
-    # First operation still pending
-    assert len(agent._pending_operations) == 1
+    # First operation still unresolved
+    assert _get_unresolved_count(agent) == 1
 
     print("[PASS] test_explicit_retry_new_identity passed")
 
@@ -605,8 +624,8 @@ def test_regression_normal_operations():
     assert recent_ops[0].success is True
     assert recent_ops[0].tool == "box"
 
-    # No pending operations
-    assert len(agent._pending_operations) == 0
+    # No unresolved operations
+    assert _get_unresolved_count(agent) == 0
 
     print("[PASS] test_regression_normal_operations passed")
 
@@ -662,8 +681,8 @@ def test_regression_ordinary_errors():
     recent_ops = agent.design_state.get_recent_operations()
     assert len(recent_ops) == 0
 
-    # Not in pending (not a timeout)
-    assert len(agent._pending_operations) == 0
+    # Not in unresolved (not a timeout)
+    assert _get_unresolved_count(agent) == 0
 
     print("[PASS] test_regression_ordinary_errors passed")
 
@@ -722,8 +741,8 @@ def test_bip68_timeout_recovery_intact():
     assert tool_traces[0]["success"] is False
     assert tool_traces[0]["transient"] is True  # BIP 6.8: timeout is transient
 
-    # Pending tracked (BIP 6.9)
-    assert len(agent._pending_operations) == 1
+    # Unresolved tracked (BIP 6.9 -> OperationRegistry)
+    assert _get_unresolved_count(agent) == 1
 
     print("[PASS] test_bip68_timeout_recovery_intact passed")
 

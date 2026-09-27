@@ -15,6 +15,11 @@ from core.context import (
 )
 from core.intent import IntentClassifier
 from core.tool_registry import get_global_registry, infer_capability_from_schema
+from core.operations import (
+    OperationRegistry,
+    MutationGate,
+    OperationStatus,
+)
 
 # Transient LLM/transport exception types. Imported defensively so the core
 # remains provider-independent: if the openai SDK is unavailable, we fall back
@@ -180,10 +185,9 @@ class CADAgent:
         # the same tool/target has different args, both are preserved.
         self._last_failed_args: Dict[tuple, Dict[str, Any]] = {}
 
-        # BIP 6.9: Track pending/unresolved operations to protect against late
-        # completion after timeout. Maps operation_id -> {tool, args, target, step, ts}
-        self._pending_operations: Dict[str, Dict[str, Any]] = {}
-        # Counter for generating unique operation IDs
+        # BIP 7.0: Operation lifecycle and mutation serialization
+        self._operation_registry = OperationRegistry()
+        self._mutation_gate = MutationGate(self._operation_registry)
         self._operation_counter: int = 0
 
     def _is_transient_error(self, error: RuntimeError) -> bool:
@@ -323,29 +327,33 @@ class CADAgent:
         )
 
     def _check_pending_operations_against_state(self, state_objects: List[Dict[str, Any]]) -> None:
-        """BIP 6.9: Check if any pending (timed-out) operations have late-completed.
+        """BIP 7.0: Check if any unresolved operations have late-completed.
 
-        When a mutation operation times out, we track it in _pending_operations.
+        When a mutation operation times out, it's tracked in the OperationRegistry as UNRESOLVED.
         If state refresh shows the target object now exists, the operation may have
-        completed late. We don't automatically record it as success (the agent
-        already recorded failure), but we log it for audit and clear the pending entry.
+        completed late. We reconcile the operation and log for audit.
 
         Args:
             state_objects: List of object dicts from current CAD state
         """
         existing_ids = {obj.get("id")
                         for obj in state_objects if isinstance(obj, dict)}
-        pending_to_clear = []
-        for op_id, pending in self._pending_operations.items():
-            target_id = pending.get("target_id")
-            feature_id = pending.get("args", {}).get("id")
+
+        # Get all unresolved operations from the registry
+        unresolved = self._operation_registry.get_unresolved()
+        for op_id, record in unresolved.items():
+            target_id = record.target_id
+            feature_id = record.args.get("id")
             # Check if either the target or the new feature ID exists in state
             if (target_id and target_id in existing_ids) or (feature_id and feature_id in existing_ids):
-                print(f"[LateCompletion] Operation {op_id} ({pending['tool']}) may have completed late. "
-                      f"Target/feature found in state. Clearing pending.")
-                pending_to_clear.append(op_id)
-        for op_id in pending_to_clear:
-            self._pending_operations.pop(op_id, None)
+                print(f"[LateCompletion] Operation {op_id} ({record.tool}) may have completed late. "
+                      f"Target/feature found in state. Reconciling.")
+                # Mark late completion detected
+                self._operation_registry.mark_late_completion(op_id)
+                # Reconcile as "completed" - the object exists in state
+                self._operation_registry.reconcile(op_id, "completed")
+                # Release the mutation gate for this operation
+                self._mutation_gate.force_release_for_reconciliation(op_id)
 
     def get_context_telemetry(self) -> List[Dict[str, Any]]:
         """Return recorded per-LLM-call context telemetry (estimate flags set).
@@ -664,9 +672,19 @@ class CADAgent:
                 print(
                     f"[Execution] Step {step+1}: Tool '{name}' with args: {args}")
 
-                # BIP 6.9: Generate unique operation ID for this execution attempt
+                # BIP 7.0: Generate unique operation ID for this execution attempt
                 self._operation_counter += 1
                 operation_id = f"op_{self._operation_counter}_{name}_{step+1}"
+
+                # Check if this is a mutation tool that requires serialization
+                mutation_tools = {"box", "cylinder", "boolean", "hole", "fillet", "chamfer",
+                                  "shell", "edit_feature", "pattern_linear", "pattern_circular",
+                                  "delete_feature", "mate", "sketch", "extrude"}
+                is_mutation = name in mutation_tools
+
+                # Create operation record in registry
+                self._operation_registry.create(
+                    operation_id, name, dict(args), target, step + 1)
 
                 # --- Execute with transient retry; retain non-transient errors ---
                 out = None
@@ -674,9 +692,42 @@ class CADAgent:
                 success = False
                 attempts = 0
                 transient = False
+                gate_acquired = False
+
                 for attempt in range(self.MAX_RETRIES + 1):
                     attempts = attempt + 1
                     try:
+                        # BIP 7.0: Acquire mutation gate for mutation tools
+                        if is_mutation and not gate_acquired:
+                            acquired = self._mutation_gate.acquire(
+                                operation_id)
+                            if not acquired:
+                                # Blocked by unresolved operation - return structured error
+                                # Get the unresolved operation ID for the error message
+                                unresolved_ops = self._operation_registry.get_unresolved()
+                                unresolved_id = next(
+                                    iter(unresolved_ops.keys())) if unresolved_ops else "unknown"
+                                error = RuntimeError(
+                                    f"Cannot execute '{name}': mutation operation {unresolved_id} is unresolved. "
+                                    f"Please wait for reconciliation or retry later.")
+                                error_type = "unresolved_operation"
+                                transient = False
+                                success = False
+                                # Record trace for blocked mutation
+                                if self._capture_trace:
+                                    self._trace.append({
+                                        "step": step + 1,
+                                        "tool": name,
+                                        "arguments": args,
+                                        "result": str(error),
+                                        "success": False,
+                                        "error": str(error),
+                                        "attempt": attempts,
+                                        "transient": False,
+                                    })
+                                break
+                            gate_acquired = True
+
                         # Pass operation_id to adapter for tracking (adapter may ignore if not supported)
                         out = self.adapter.execute_command(
                             name, _operation_id=operation_id, **args)
@@ -693,16 +744,9 @@ class CADAgent:
                                     error_type = parsed.get("error_type", "")
                                     if "timeout" in error_type.lower():
                                         transient = True  # timeout is transient for retry purposes
-                                        # BIP 6.9: Mark operation as pending/unresolved
-                                        self._pending_operations[operation_id] = {
-                                            "tool": name,
-                                            "args": dict(args),
-                                            "target_id": target,
-                                            "step": step + 1,
-                                            "ts": time.time(),
-                                            "status": "timeout",
-                                            "error_type": error_type,
-                                        }
+                                        # BIP 7.0: Mark operation as unresolved (timed out)
+                                        self._operation_registry.timeout(
+                                            operation_id, error_type, parsed.get("error", "Timeout"))
                                     else:
                                         transient = self._is_transient_error(
                                             error)
@@ -711,23 +755,16 @@ class CADAgent:
                             except (json.JSONDecodeError, TypeError):
                                 # Not JSON or not a structured error - treat as success
                                 pass
-                        # BIP 6.9: Check for late completion of a previously timed-out operation
-                        # If this operation_id was pending and now succeeds, it's a late completion
-                        if operation_id in self._pending_operations:
-                            pending = self._pending_operations.pop(
-                                operation_id)
-                            # Late completion: don't trust it blindly; verify via state refresh
-                            # We still record success but mark as late for audit
-                            pending["status"] = "late_completion"
-                            print(
-                                f"[LateCompletion] Operation {operation_id} ({name}) completed after timeout. "
-                                f"State will be verified via refresh.")
                         success = True
                         break
                     except (ConnectionError, OSError) as e:
                         error = e
                         transient = True
                         attempts = attempt + 1
+                        # Release mutation gate on retry
+                        if is_mutation and gate_acquired:
+                            self._mutation_gate.release(operation_id)
+                            gate_acquired = False
                         if attempt < self.MAX_RETRIES:
                             print(
                                 f"[Retry] Step {step+1}: Tool '{name}' attempt {attempt + 1} failed with transient error: {e}. Retrying...")
@@ -738,6 +775,10 @@ class CADAgent:
                         error = e
                         transient = self._is_transient_error(e)
                         attempts = attempt + 1
+                        # Release mutation gate on retry
+                        if is_mutation and gate_acquired and transient:
+                            self._mutation_gate.release(operation_id)
+                            gate_acquired = False
                         if transient and attempt < self.MAX_RETRIES:
                             print(
                                 f"[Retry] Step {step+1}: Tool '{name}' attempt {attempt + 1} failed with transient error: {e}. Retrying...")
@@ -755,6 +796,15 @@ class CADAgent:
                 if not success and not transient:
                     # Non-transient failure: store the requested args for this tool/target.
                     self._last_failed_args[tool_key] = dict(args)
+                    # BIP 7.0: Mark operation as failed in registry
+                    err_type = type(
+                        error).__name__ if error else "RuntimeError"
+                    err_msg = str(error) if error else "Unknown error"
+                    self._operation_registry.fail(
+                        operation_id, err_type, err_msg)
+                    # Release mutation gate on failure
+                    if is_mutation and gate_acquired:
+                        self._mutation_gate.release(operation_id)
                 elif success and tool_key in self._last_failed_args:
                     # Success after a prior non-transient failure on same tool/target.
                     # Check if achieved args differ from originally requested.
@@ -767,6 +817,11 @@ class CADAgent:
                     print(
                         f"[Execution] Step {step+1}: Tool '{name}' succeeded: {out}")
                     error_msg = None
+                    # BIP 7.0: Mark operation as succeeded in registry
+                    self._operation_registry.succeed(operation_id)
+                    # Release mutation gate on success
+                    if is_mutation and gate_acquired:
+                        self._mutation_gate.release(operation_id)
                 else:
                     if error is None:
                         error = RuntimeError(
@@ -783,6 +838,14 @@ class CADAgent:
                         "transient": transient,
                         "retries": attempts - 1,
                     }, default=str))
+                    # Release mutation gate on non-timeout failure
+                    if is_mutation and gate_acquired and not transient:
+                        self._mutation_gate.release(operation_id)
+                    # For timeout: release the PHYSICAL lock (timeout boundary returns
+                    # control to caller, so the critical section ends). The LOGICAL
+                    # unresolved barrier is maintained by the OperationRegistry.
+                    if is_mutation and gate_acquired and transient:
+                        self._mutation_gate.release(operation_id)
 
                 # Record trace entry if capture_trace is enabled
                 if self._capture_trace:
@@ -903,8 +966,10 @@ class CADAgent:
                     new_state = json.loads(new_state_json)
                     # Immediately synchronize DesignState with the live CAD state.
                     self._update_design_state(new_state_json)
-                    # BIP 6.9: Check if any pending operation's target now exists (late completion)
+                    # BIP 7.0: Check if any unresolved operation's target now exists (late completion)
                     self._check_pending_operations_against_state(new_state)
+                    # Periodic cleanup of old reconciled operations
+                    self._operation_registry.cleanup_reconciled(max_age=300.0)
                 except Exception as e:
                     print(
                         f"[Agent] Warning: Failed to get state for verification/sync: {e}")
