@@ -56,7 +56,7 @@ class LLMProvider:
         The return value (the assistant message) is unchanged for backward
         compatibility. Exact provider token usage, when reported by the API, is
         stored on ``self.last_usage`` (a dict with prompt_tokens /
-        completion_tokens / total_tokens) or None when unavailable.
+        completion_tokens / total_tokens, model, and provider) or None when unavailable.
         """
         kwargs: Dict[str, Any] = {
             "model": self.model,
@@ -76,6 +76,8 @@ class LLMProvider:
                 "prompt_tokens": getattr(response.usage, 'prompt_tokens', None),
                 "completion_tokens": getattr(response.usage, 'completion_tokens', None),
                 "total_tokens": getattr(response.usage, 'total_tokens', None),
+                "model": self.model,
+                "provider": "openai-compatible",
             }
             usage = {k: v for k, v in usage.items() if v is not None}
             if usage:

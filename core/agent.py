@@ -187,6 +187,17 @@ class CADAgent:
         # without dumping large payloads into normal logs.
         self._context_telemetry: List[Dict[str, Any]] = []
 
+        # BIP 10.2: Token-count instrumentation for the current handle_message call.
+        self._token_telemetry: Dict[str, Any] = {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_tokens": 0,
+            "llm_calls": 0,
+            "model": None,
+            "provider": None,
+            "per_step": [],
+        }
+
         # BIP 4.3.2: Track last failed tool args per (tool, target) for
         # requested-vs-achieved integrity. When a tool fails with a non-transient
         # error, we remember the requested args. If the next successful call to
@@ -444,6 +455,17 @@ class CADAgent:
         # Reset per-turn context telemetry (each handle_message is a new turn).
         self._context_telemetry = []
 
+        # BIP 10.2: Reset token telemetry for this handle_message call.
+        self._token_telemetry = {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_tokens": 0,
+            "llm_calls": 0,
+            "model": None,
+            "provider": None,
+            "per_step": [],
+        }
+
         # Short-term scratchpad for this ReAct loop execution
         scratchpad = []
 
@@ -565,6 +587,7 @@ class CADAgent:
                         "type": "llm_error",
                         "error": fail_msg,
                         "termination_reason": "llm_error",
+                        "token_telemetry": self._token_telemetry.copy(),
                     })
                 return fail_msg, session_tools
 
@@ -584,12 +607,42 @@ class CADAgent:
                         "type": "llm_unavailable",
                         "message": fail_msg,
                         "termination_reason": "llm_transient_exhausted",
+                        "token_telemetry": self._token_telemetry.copy(),
                     })
                 return fail_msg, session_tools
 
             # Exact provider-reported token usage (None when a provider does not
             # report usage, or for stubs that do not expose last_usage).
             provider_usage = getattr(self.provider, "last_usage", None)
+
+            # BIP 10.2: Track token usage for this LLM call.
+            if provider_usage:
+                input_tokens = provider_usage.get("prompt_tokens", 0)
+                output_tokens = provider_usage.get("completion_tokens", 0)
+                total_tokens = provider_usage.get("total_tokens", 0)
+                model = provider_usage.get("model")
+                provider_name = provider_usage.get("provider")
+
+                # Accumulate for the handle_message call
+                self._token_telemetry["total_input_tokens"] += input_tokens
+                self._token_telemetry["total_output_tokens"] += output_tokens
+                self._token_telemetry["total_tokens"] += total_tokens
+                self._token_telemetry["llm_calls"] += 1
+                # Capture model/provider from first call that has it
+                if self._token_telemetry["model"] is None and model:
+                    self._token_telemetry["model"] = model
+                if self._token_telemetry["provider"] is None and provider_name:
+                    self._token_telemetry["provider"] = provider_name
+
+                # Record per-step breakdown
+                self._token_telemetry["per_step"].append({
+                    "step": step + 1,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": total_tokens,
+                    "model": model,
+                    "provider": provider_name,
+                })
 
             # Record compiled-context telemetry after the LLM call, attaching
             # the exact provider-reported token usage (if the provider supplied
@@ -629,6 +682,7 @@ class CADAgent:
                             "type": "completion",
                             "reply": reply,
                             "termination_reason": "no_tool_calls",
+                            "token_telemetry": self._token_telemetry.copy(),
                         })
                     return reply, session_tools
                 # Empty response: do not fabricate success. Continue the ReAct
@@ -641,6 +695,7 @@ class CADAgent:
                         "step": step + 1,
                         "type": "empty_response",
                         "termination_reason": "empty_response_continue",
+                        "token_telemetry": self._token_telemetry.copy(),
                     })
                 continue
 
@@ -1234,6 +1289,7 @@ class CADAgent:
                         "error": error_msg if not success else None,
                         "attempt": attempts,
                         "transient": transient,
+                        "token_telemetry": self._token_telemetry.copy(),
                     })
 
                 # Record the tool outcome into the authoritative DesignState.
@@ -1421,3 +1477,19 @@ class CADAgent:
         Returns an empty list if capture_trace was not enabled.
         """
         return self._trace if self._capture_trace else []
+
+    def get_token_telemetry(self) -> Dict[str, Any]:
+        """Return token usage telemetry for the most recent handle_message call.
+
+        Returns a dict with:
+        - total_input_tokens: sum of prompt tokens across all LLM calls
+        - total_output_tokens: sum of completion tokens across all LLM calls
+        - total_tokens: sum of total tokens across all LLM calls
+        - llm_calls: number of LLM calls made
+        - model: model name (if available)
+        - provider: provider name (if available)
+        - per_step: list of per-step token breakdowns
+
+        Returns empty dict if no LLM calls were made.
+        """
+        return self._token_telemetry
