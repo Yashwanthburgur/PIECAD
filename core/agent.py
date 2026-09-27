@@ -143,10 +143,20 @@ REACT_LOOP_INJECTION = """You are in a multi-step ReAct loop. DO NOT output conv
 class CADAgent:
     MAX_RETRIES = 3
     MAX_STEPS = 15
+    # BIP 10.4: Hard ceiling on total provider-reported LLM tokens consumed
+    # within a single handle_message() call. ``None`` disables enforcement.
+    MAX_TOKENS_PER_TURN: Optional[int] = 100000
+    # Distinct termination reason for the per-turn token ceiling. Kept separate
+    # from MAX_STEPS exhaustion, provider/API failure, context-budget
+    # trimming/overflow, and tool execution failure.
+    TOKEN_CEILING_TERMINATION_REASON = "token_ceiling"
     # Bounded retry budget for transient LLM/provider transport failures.
     MAX_LLM_RETRIES = 2
     # Base backoff (seconds) between LLM retries; doubled per attempt.
     LLM_RETRY_BACKOFF = 0.5
+
+    # Sentinel for "parameter not provided" to distinguish from explicit None
+    _UNSET = object()
 
     def __init__(
         self,
@@ -154,6 +164,7 @@ class CADAgent:
         provider: Optional[LLMProvider] = None,
         *,
         capture_trace: bool = False,
+        max_tokens_per_turn: Optional[int] = _UNSET,
     ):
         self.adapter = adapter
         self.provider = provider or LLMProvider()
@@ -187,6 +198,15 @@ class CADAgent:
         # without dumping large payloads into normal logs.
         self._context_telemetry: List[Dict[str, Any]] = []
 
+        # BIP 10.4: Per-turn total-token ceiling (None disables enforcement).
+        # Configurable per instance; defaults to the class-wide ceiling.
+        # Explicit None disables the ceiling; not provided uses class default.
+        self.max_tokens_per_turn: Optional[int] = (
+            self.MAX_TOKENS_PER_TURN
+            if max_tokens_per_turn is self._UNSET
+            else max_tokens_per_turn
+        )
+
         # BIP 10.2: Token-count instrumentation for the current handle_message call.
         self._token_telemetry: Dict[str, Any] = {
             "total_input_tokens": 0,
@@ -196,6 +216,9 @@ class CADAgent:
             "model": None,
             "provider": None,
             "per_step": [],
+            # BIP 10.4: per-turn ceiling observability.
+            "ceiling_limit": None,
+            "ceiling_reached": False,
         }
 
         # BIP 10.3: Session-scoped design conventions memory.
@@ -342,6 +365,23 @@ class CADAgent:
         # being retried and masked. Only explicitly recognised transient
         # indicators (above) are retried.
         return False
+
+    def _is_token_ceiling_reached(self) -> bool:
+        """Return True if the per-turn token ceiling has been reached/exceeded.
+
+        Only provider-reported exact tokens count toward the ceiling. Calls
+        where the provider does not return usage metadata contribute 0 and
+        cannot trigger the ceiling — this is the deterministic behaviour
+        required by BIP 10.4 for providers that omit token usage.
+
+        Returns:
+            True if a ceiling is configured (non-None) and the cumulative
+            exact total_tokens >= ceiling.
+        """
+        ceiling = self.max_tokens_per_turn
+        if ceiling is None:
+            return False
+        return self._token_telemetry["total_tokens"] >= ceiling
 
     def _extract_bbox_constraints(self, user_message: str) -> Optional[Dict[str, float]]:
         """Extract explicit bounding-box constraints from user message.
@@ -543,6 +583,7 @@ class CADAgent:
         self._context_telemetry = []
 
         # BIP 10.2: Reset token telemetry for this handle_message call.
+        # BIP 10.4: also reset the per-turn ceiling observability fields.
         self._token_telemetry = {
             "total_input_tokens": 0,
             "total_output_tokens": 0,
@@ -551,6 +592,8 @@ class CADAgent:
             "model": None,
             "provider": None,
             "per_step": [],
+            "ceiling_limit": self.max_tokens_per_turn,
+            "ceiling_reached": False,
         }
 
         # BIP 10.3: Design conventions are stored in session memory (persisted across turns)
@@ -733,6 +776,16 @@ class CADAgent:
                     "model": model,
                     "provider": provider_name,
                 })
+            else:
+                # BIP 10.4: The provider did not report usage metadata. We do
+                # NOT fabricate a token count: the call contributes 0 to the
+                # cumulative exact total and therefore cannot trigger the
+                # per-turn ceiling. This is the deterministic behaviour for a
+                # provider that omits token usage — the ceiling only enforces
+                # against real provider-reported totals.
+                self._token_telemetry["usage_unavailable_calls"] = (
+                    self._token_telemetry.get("usage_unavailable_calls", 0) + 1
+                )
 
             # Record compiled-context telemetry after the LLM call, attaching
             # the exact provider-reported token usage (if the provider supplied
@@ -747,6 +800,38 @@ class CADAgent:
                     compiled.telemetry.total_tokens = provider_usage.get(
                         "total_tokens")
                 self._context_telemetry.append(compiled.telemetry.to_dict())
+
+            # BIP 10.4: Per-turn total-token ceiling enforcement.
+            # If this LLM call caused the cumulative provider-reported total to
+            # reach/exceed the configured ceiling, stop further LLM reasoning
+            # for this turn immediately — do NOT begin another ReAct step.
+            # This is reported as a structured failure that is distinct from:
+            #   - MAX_STEPS exhaustion (different termination_reason/message)
+            #   - context-budget overflow (that trims context, never aborts)
+            #   - provider/API failure (different message/type)
+            #   - tool execution failure (different message/type)
+            if self._is_token_ceiling_reached():
+                self._token_telemetry["ceiling_reached"] = True
+                fail_msg = (
+                    "Operation stopped: per-turn token ceiling "
+                    f"({self.max_tokens_per_turn} tokens) reached after "
+                    f"{self._token_telemetry['llm_calls']} LLM call(s) "
+                    f"({self._token_telemetry['total_tokens']} tokens "
+                    "consumed). Further reasoning for this turn was halted to "
+                    "bound cost; the CAD state was not modified by this step."
+                )
+                print(f"\033[91m[ERROR] {fail_msg}\033[0m")
+                self.history.append({"role": "assistant", "content": fail_msg})
+                self.conversation.add_assistant(fail_msg)
+                if self._capture_trace:
+                    self._trace.append({
+                        "step": step + 1,
+                        "type": "token_ceiling_reached",
+                        "message": fail_msg,
+                        "termination_reason": self.TOKEN_CEILING_TERMINATION_REASON,
+                        "token_telemetry": self._token_telemetry.copy(),
+                    })
+                return fail_msg, session_tools
 
             # 7. If LLM returns plain text (NO tool calls):
             #    - meaningful content -> normal completion.
