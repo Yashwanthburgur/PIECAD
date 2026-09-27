@@ -270,6 +270,111 @@ class DesignState:
         key = f"{object_id}:{ref_type}_version"
         self.derived_facts[key] = version
 
+    def record_topology_reference_with_signature(
+            self,
+            object_id: str,
+            ref_type: str,
+            version: str,
+            ref_id: str,
+            signature: Dict[str, Any]) -> None:
+        """Record a topology reference with its geometric signature.
+
+        Args:
+            object_id: The target object ID (e.g., "box1")
+            ref_type: "edge" or "face"
+            version: The topology version at which the reference was emitted
+            ref_id: The specific reference ID (e.g., "box1_edge_1")
+            signature: Geometric signature dict with keys:
+                - center: {"x": float, "y": float, "z": float}
+                - area: float (for faces) or length: float (for edges)
+                - normal: {"x": float, "y": float, "z": float} (for faces)
+        """
+        # Record the version as before
+        self.record_topology_reference(object_id, ref_type, version)
+
+        # Store signature keyed by object_id:ref_type:ref_id
+        sig_key = f"{object_id}:{ref_type}:{ref_id}:signature"
+        self.derived_facts[sig_key] = signature
+
+    def validate_topology_signature(
+            self,
+            object_id: str,
+            ref_type: str,
+            ref_id: str,
+            current_signature: Dict[str, Any],
+            tolerance: float = 1e-6) -> Dict[str, Any]:
+        """Validate a topology reference's current geometric signature against stored.
+
+        Args:
+            object_id: The target object ID
+            ref_type: "edge" or "face"
+            ref_id: The specific reference ID
+            current_signature: Current geometric signature from CAD kernel
+            tolerance: Float comparison tolerance
+
+        Returns:
+            Dict with:
+            - "match": bool (True if signatures match within tolerance)
+            - "stored_signature": the stored signature (or None if not found)
+            - "mismatch_details": list of fields that differ (empty if match)
+        """
+        sig_key = f"{object_id}:{ref_type}:{ref_id}:signature"
+        stored = self.derived_facts.get(sig_key)
+
+        if stored is None:
+            return {
+                "match": True,  # No stored signature = cannot validate, assume match
+                "stored_signature": None,
+                "mismatch_details": ["no_stored_signature"]
+            }
+
+        mismatches = []
+
+        # Compare center of mass
+        stored_center = stored.get("center", {})
+        current_center = current_signature.get("center", {})
+        for axis in ("x", "y", "z"):
+            s_val = stored_center.get(axis)
+            c_val = current_center.get(axis)
+            if s_val is not None and c_val is not None:
+                if abs(s_val - c_val) > tolerance:
+                    mismatches.append(
+                        f"center.{axis}: stored={s_val}, current={c_val}")
+
+        # Compare area (faces) or length (edges)
+        if ref_type == "face":
+            s_area = stored.get("area")
+            c_area = current_signature.get("area")
+            if s_area is not None and c_area is not None:
+                if abs(s_area - c_area) > tolerance:
+                    mismatches.append(
+                        f"area: stored={s_area}, current={c_area}")
+        elif ref_type == "edge":
+            s_len = stored.get("length")
+            c_len = current_signature.get("length")
+            if s_len is not None and c_len is not None:
+                if abs(s_len - c_len) > tolerance:
+                    mismatches.append(
+                        f"length: stored={s_len}, current={c_len}")
+
+        # Compare normal (faces only)
+        if ref_type == "face":
+            stored_normal = stored.get("normal", {})
+            current_normal = current_signature.get("normal", {})
+            for axis in ("x", "y", "z"):
+                s_val = stored_normal.get(axis)
+                c_val = current_normal.get(axis)
+                if s_val is not None and c_val is not None:
+                    if abs(s_val - c_val) > tolerance:
+                        mismatches.append(
+                            f"normal.{axis}: stored={s_val}, current={c_val}")
+
+        return {
+            "match": len(mismatches) == 0,
+            "stored_signature": stored,
+            "mismatch_details": mismatches
+        }
+
     def is_reference_stale(self, object_id: str, ref_type: str,
                            ref_version: str) -> bool:
         """Check if a reference is stale.
@@ -289,6 +394,11 @@ class DesignState:
         """Get the version at which the last get_edges/get_faces was called for this object."""
         key = f"{object_id}:{ref_type}_version"
         return self.derived_facts.get(key, "0")
+
+    def get_stored_signature(self, object_id: str, ref_type: str, ref_id: str) -> Optional[Dict[str, Any]]:
+        """Get the stored geometric signature for a reference."""
+        sig_key = f"{object_id}:{ref_type}:{ref_id}:signature"
+        return self.derived_facts.get(sig_key)
 
     def update_from_tool_result(
         self,
@@ -340,6 +450,30 @@ class DesignState:
                 self.topology_versions[target_id] = version
                 ref_type = "edge" if tool == "get_edges" else "face"
                 self.record_topology_reference(target_id, ref_type, version)
+
+                # BIP 9.2: Capture geometric signatures for each face/edge reference
+                refs_key = "edges" if tool == "get_edges" else "faces"
+                if refs_key in parsed and isinstance(parsed[refs_key], list):
+                    for ref in parsed[refs_key]:
+                        ref_id = ref.get(
+                            "edge_id") if tool == "get_edges" else ref.get("face_id")
+                        if ref_id:
+                            # Build signature from the returned data
+                            signature = {
+                                "center": ref.get("center", {}),
+                            }
+                            if tool == "get_edges":
+                                if "length" in ref:
+                                    signature["length"] = ref["length"]
+                                if "tangent" in ref:
+                                    signature["tangent"] = ref["tangent"]
+                            else:  # get_faces
+                                if "area" in ref:
+                                    signature["area"] = ref["area"]
+                                if "normal" in ref:
+                                    signature["normal"] = ref["normal"]
+                            self.record_topology_reference_with_signature(
+                                target_id, ref_type, version, ref_id, signature)
 
         # BIP 4.3.4: Increment topology version for topology-altering operations
         topology_altering_tools = {"fillet", "chamfer", "boolean", "hole",
@@ -501,9 +635,10 @@ class DesignState:
         # be wiped before the next fillet/chamfer, causing the agent to omit
         # `topology_version`, the adapter to default it to 0, and the bridge to
         # reject a valid reference as stale.
+        # Also preserve topology signature keys (ending with :signature).
         preserved_refs = {
             k: v for k, v in self.derived_facts.items()
-            if k.endswith("_version") and ":" in k
+            if (k.endswith("_version") and ":" in k) or k.endswith(":signature")
         }
         facts: Dict[str, Any] = {
             "solid_count": sum(1 for o in self.objects.values() if o.is_solid()),

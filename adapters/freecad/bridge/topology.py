@@ -87,7 +87,7 @@ def _impl_get_faces(obj_name: str):
     """Query the B-rep faces of an existing object.
 
     Returns a dict with:
-    - faces: list of face dicts (face_id, face_index, center, area)
+    - faces: list of face dicts (face_id, face_index, center, area, normal)
     - topology_version: str (deterministic hex digest for this object's faces)
     """
     doc = _active_doc()
@@ -100,6 +100,30 @@ def _impl_get_faces(obj_name: str):
 
     faces_data = []
     for i, face in enumerate(obj.Shape.Faces):
+        # Get face normal at center of mass (approximate)
+        normal = {"x": 0.0, "y": 0.0, "z": 0.0}
+        try:
+            # Use the face's normal at the center parameter
+            uv = face.Surface.parameter(face.CenterOfMass)
+            normal_vec = face.normalAt(uv[0], uv[1])
+            normal = {
+                "x": round(float(normal_vec.x), 3),
+                "y": round(float(normal_vec.y), 3),
+                "z": round(float(normal_vec.z), 3)
+            }
+        except Exception:
+            # Fallback: use first normal if available
+            try:
+                if hasattr(face, "normalAt"):
+                    normal_vec = face.normalAt(0.5, 0.5)
+                    normal = {
+                        "x": round(float(normal_vec.x), 3),
+                        "y": round(float(normal_vec.y), 3),
+                        "z": round(float(normal_vec.z), 3)
+                    }
+            except Exception:
+                pass
+
         faces_data.append({
             "face_id": f"{obj_name}_face_{i+1}",
             "face_index": i + 1,
@@ -108,7 +132,8 @@ def _impl_get_faces(obj_name: str):
                 "y": round(float(face.CenterOfMass.y), 3),
                 "z": round(float(face.CenterOfMass.z), 3)
             },
-            "area": round(float(face.Area), 3)
+            "area": round(float(face.Area), 3),
+            "normal": normal
         })
 
     # Include topology version for stale reference detection (BIP 4.3.4)
@@ -139,6 +164,21 @@ def _impl_get_edges(obj_name: str):
 
     edges_data = []
     for i, edge in enumerate(obj.Shape.Edges):
+        # Get edge tangent at center (approximate direction)
+        tangent = {"x": 0.0, "y": 0.0, "z": 0.0}
+        try:
+            if hasattr(edge, "tangentAt"):
+                param = edge.FirstParameter + \
+                    (edge.LastParameter - edge.FirstParameter) * 0.5
+                tangent_vec = edge.tangentAt(param)
+                tangent = {
+                    "x": round(float(tangent_vec.x), 3),
+                    "y": round(float(tangent_vec.y), 3),
+                    "z": round(float(tangent_vec.z), 3)
+                }
+        except Exception:
+            pass
+
         edges_data.append({
             "edge_id": f"{obj_name}_edge_{i+1}",
             "edge_index": i + 1,
@@ -147,7 +187,8 @@ def _impl_get_edges(obj_name: str):
                 "y": round(float(edge.CenterOfMass.y), 3),
                 "z": round(float(edge.CenterOfMass.z), 3)
             },
-            "length": round(float(edge.Length), 3)
+            "length": round(float(edge.Length), 3),
+            "tangent": tangent
         })
 
     # Include topology version for stale reference detection (BIP 4.3.4)
