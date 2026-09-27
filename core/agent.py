@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from providers.llm.provider import LLMProvider
 from core.adapters.interfaces import CADAdapter
 from core.router import ToolRouter
-from core.verification.checks import check_geometry
+from core.verification.checks import check_geometry, GeometryVerifier
 # Context Engine (BIP 4.2): provider-independent state / memory / compilation.
 from core.context import (
     ContextCompiler,
@@ -699,18 +699,27 @@ class CADAgent:
                     try:
                         # BIP 7.0: Acquire mutation gate for mutation tools
                         if is_mutation and not gate_acquired:
-                            acquired = self._mutation_gate.acquire(
+                            acquired, error_type = self._mutation_gate.acquire(
                                 operation_id)
                             if not acquired:
-                                # Blocked by unresolved operation - return structured error
-                                # Get the unresolved operation ID for the error message
-                                unresolved_ops = self._operation_registry.get_unresolved()
-                                unresolved_id = next(
-                                    iter(unresolved_ops.keys())) if unresolved_ops else "unknown"
-                                error = RuntimeError(
-                                    f"Cannot execute '{name}': mutation operation {unresolved_id} is unresolved. "
-                                    f"Please wait for reconciliation or retry later.")
-                                error_type = "unresolved_operation"
+                                if error_type == "unresolved_operation":
+                                    # Blocked by unresolved operation - return structured error
+                                    # Get the unresolved operation ID for the error message
+                                    unresolved_ops = self._operation_registry.get_unresolved()
+                                    unresolved_id = next(
+                                        iter(unresolved_ops.keys())) if unresolved_ops else "unknown"
+                                    error = RuntimeError(
+                                        f"Cannot execute '{name}': mutation operation {unresolved_id} is unresolved. "
+                                        f"Please wait for reconciliation or retry later.")
+                                elif error_type == "mutation_gate_timeout":
+                                    # Physical lock timeout - return structured error
+                                    error = RuntimeError(
+                                        f"Cannot execute '{name}': mutation gate timeout waiting for physical lock. "
+                                        f"Another mutation is currently executing.")
+                                else:
+                                    error = RuntimeError(
+                                        f"Cannot execute '{name}': mutation gate acquisition failed.")
+                                error_type = error_type or "mutation_gate_error"
                                 transient = False
                                 success = False
                                 # Record trace for blocked mutation
@@ -822,6 +831,89 @@ class CADAgent:
                     # Release mutation gate on success
                     if is_mutation and gate_acquired:
                         self._mutation_gate.release(operation_id)
+
+                    # BIP 8.1: Operation-specific geometry verification
+                    # Verify volume reduction for boolean subtract and hole operations
+                    if name == "boolean" and args.get("mode") == "subtract":
+                        # Verify that boolean subtract actually removed material
+                        base_id = args.get("target_id")
+                        result_id = args.get("id")
+                        if base_id and result_id:
+                            try:
+                                # Get mass properties of the base object (need to query before state changes)
+                                # Since the base object is now hidden, we need to get it from the result
+                                # The result object (Part::Cut) should have the reduced volume
+                                base_mass = self.adapter.execute_command(
+                                    "get_mass_properties", object_name=base_id)
+                                result_mass = self.adapter.execute_command(
+                                    "get_mass_properties", object_name=result_id)
+                                ok, reason = GeometryVerifier.verify_volume_reduction(
+                                    base_mass, result_mass)
+                                if not ok:
+                                    error_msg = f"Verification failed: {reason}"
+                                    print(
+                                        f"\033[91m[VERIFY] {error_msg}\033[0m")
+                                    # Convert success to failure for the agent recovery loop
+                                    success = False
+                                    results[-1] = json.dumps({
+                                        "status": "error",
+                                        "tool": name,
+                                        "error_type": "GeometryVerificationError",
+                                        "error": error_msg,
+                                        "arguments": args,
+                                        "transient": False,
+                                        "retries": 0,
+                                    }, default=str)
+                                    # Mark operation as failed
+                                    self._operation_registry.fail(
+                                        operation_id, "GeometryVerificationError", error_msg)
+                                    # Release mutation gate since we're treating this as failure
+                                    if is_mutation and gate_acquired:
+                                        self._mutation_gate.release(
+                                            operation_id)
+                            except Exception as e:
+                                # Verification error - log but don't fail the operation
+                                print(
+                                    f"[VERIFY] Warning: Volume reduction check failed: {e}")
+
+                    elif name == "hole":
+                        # Verify that hole operation actually removed material
+                        target_id = args.get("target_id")
+                        result_id = args.get("id")
+                        if target_id and result_id:
+                            try:
+                                target_mass = self.adapter.execute_command(
+                                    "get_mass_properties", object_name=target_id)
+                                result_mass = self.adapter.execute_command(
+                                    "get_mass_properties", object_name=result_id)
+                                ok, reason = GeometryVerifier.verify_volume_reduction(
+                                    target_mass, result_mass)
+                                if not ok:
+                                    error_msg = f"Verification failed: {reason}"
+                                    print(
+                                        f"\033[91m[VERIFY] {error_msg}\033[0m")
+                                    # Convert success to failure for the agent recovery loop
+                                    success = False
+                                    results[-1] = json.dumps({
+                                        "status": "error",
+                                        "tool": name,
+                                        "error_type": "GeometryVerificationError",
+                                        "error": error_msg,
+                                        "arguments": args,
+                                        "transient": False,
+                                        "retries": 0,
+                                    }, default=str)
+                                    # Mark operation as failed
+                                    self._operation_registry.fail(
+                                        operation_id, "GeometryVerificationError", error_msg)
+                                    # Release mutation gate since we're treating this as failure
+                                    if is_mutation and gate_acquired:
+                                        self._mutation_gate.release(
+                                            operation_id)
+                            except Exception as e:
+                                # Verification error - log but don't fail the operation
+                                print(
+                                    f"[VERIFY] Warning: Volume reduction check failed: {e}")
                 else:
                     if error is None:
                         error = RuntimeError(
