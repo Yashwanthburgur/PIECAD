@@ -198,6 +198,10 @@ class CADAgent:
             "per_step": [],
         }
 
+        # BIP 10.3: Session-scoped design conventions memory.
+        # These persist across handle_message calls within the same session.
+        # Convention entries are stored in session_memory with kind="convention".
+
         # BIP 4.3.2: Track last failed tool args per (tool, target) for
         # requested-vs-achieved integrity. When a tool fails with a non-transient
         # error, we remember the requested args. If the next successful call to
@@ -212,6 +216,86 @@ class CADAgent:
         # BIP 8.3: Bounding-box constraints from user request (e.g., "fit within 100 x 50 x 20 mm")
         # {"max_x": 100.0, "max_y": 50.0, "max_z": 20.0}
         self._bbox_constraints: Optional[Dict[str, float]] = None
+
+    # BIP 10.3: Design conventions management methods
+    def record_design_convention(
+        self,
+        key: str,
+        value: str,
+        source: str = "agent",
+    ) -> None:
+        """Record a design convention in session memory.
+
+        Args:
+            key: A short identifier for the convention (e.g., "default_hole_size")
+            value: The convention text (e.g., "prefer M6 over M8")
+            source: Source of the convention (e.g., "user", "agent", "cadagent.update_memory")
+        """
+        self.session_memory.set(
+            key=key,
+            value=value,
+            kind="convention",
+            source=source,
+        )
+
+    def get_design_convention(self, key: str) -> Optional[str]:
+        """Retrieve a design convention by key."""
+        return self.session_memory.get(key)
+
+    def get_all_design_conventions(self) -> List[Dict[str, Any]]:
+        """Get all design conventions stored in session memory."""
+        conventions = self.session_memory.by_kind("convention")
+        return [
+            {"key": c.key, "value": c.value, "source": c.source}
+            for c in conventions
+        ]
+
+    def _is_transient_error(self, error: RuntimeError) -> bool:
+        """Return True if the RuntimeError wraps a transient connection/transport failure.
+
+        The FreeCADAdapter wraps xmlrpc.client.ProtocolError, ConnectionError, and OSError
+        into RuntimeError. We check the error message for indicators of transient failures.
+        """
+        msg = str(error).lower()
+        # Connection-related transient indicators (covers XML-RPC and direct connection errors)
+        transient_indicators = [
+            "connection", "reset", "refused", "timeout", "unreachable",
+            "broken pipe", "connection aborted", "connection lost",
+            "cannot reach", "cannot connect",
+        ]
+        return any(ind in msg for ind in transient_indicators)
+
+    # BIP 10.3: Detect and record explicit design conventions from user messages
+    def _maybe_record_convention_from_message(self, message: str) -> None:
+        """Extract and record explicit design conventions from user message.
+
+        Looks for explicit convention statements like:
+        - "set convention X to Y"
+        - "establish convention X as Y"
+        - "use convention X = Y"
+        - "convention: X = Y"
+        """
+        import re
+
+        # Pattern: "set convention <key> to <value>"
+        # or "establish convention <key> as <value>"
+        # or "convention <key> = <value>" or "convention: <key> = <value>"
+        # Allow underscores and hyphens in keys, and any non-whitespace in values
+        patterns = [
+            r'set convention\s+([\w\-]+)\s+to\s+(.+)',
+            r'establish convention\s+([\w\-]+)\s+as\s+(.+)',
+            r'convention\s+([\w\-]+)\s*=\s*(.+)',
+            r'convention:\s*([\w\-]+)\s*=\s*(.+)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                key = match.group(1).strip()
+                value = match.group(2).strip()
+                if key and value:
+                    self.record_design_convention(key, value, source="user")
+                    break
 
     def _is_transient_error(self, error: RuntimeError) -> bool:
         """Return True if the RuntimeError wraps a transient connection/transport failure.
@@ -446,6 +530,9 @@ class CADAgent:
         # Reflect the new task on the DesignState (best-effort, no forced parse).
         self.design_state.current_task = user_message.strip()
 
+        # BIP 10.3: Extract and record any explicit design conventions from user message
+        self._maybe_record_convention_from_message(user_message)
+
         # BIP 8.3: Extract bounding-box constraints from user message
         self._bbox_constraints = self._extract_bbox_constraints(user_message)
         if self._bbox_constraints:
@@ -465,6 +552,9 @@ class CADAgent:
             "provider": None,
             "per_step": [],
         }
+
+        # BIP 10.3: Design conventions are stored in session memory (persisted across turns)
+        # They are not reset per handle_message call
 
         # Short-term scratchpad for this ReAct loop execution
         scratchpad = []

@@ -201,6 +201,51 @@ class ContextCompiler:
         relevant = session_memory.relevant(user_message)
         return {k: v for k, v in relevant.items() if v}
 
+    def _extract_conventions_from_plan(
+        self,
+        session_memory: Optional[SessionMemory],
+        plan: ContextPlan,
+        user_message: str,
+    ) -> Dict[str, Any]:
+        """Extract design conventions from session memory when relevant.
+
+        BIP 10.3: Design conventions are included in compiled context when:
+        - They are explicitly requested via plan.required_memory_sections, OR
+        - The user message contains convention-related keywords
+        """
+        if session_memory is None:
+            return {}
+
+        # Check if conventions are explicitly requested in the plan
+        convention_requested = "conventions" in plan.required_memory_sections
+
+        # Also check user message for convention-related keywords
+        convention_keywords = (
+            "convention", "standard", "m3", "m4", "m5", "m6", "m8", "m10",
+            "iso", "diameter", "mounting hole", "hole",
+            "prefer", "preference", "standard", "always", "default",
+            "material", "wall thickness", "aluminum", "steel"
+        )
+        user_message_lower = user_message.lower()
+        implicit_request = any(
+            kw in user_message_lower for kw in convention_keywords)
+
+        if not convention_requested and not implicit_request:
+            return {}
+
+        # Get conventions from session memory
+        conventions = session_memory.by_kind("convention")
+        if not conventions:
+            return {}
+
+        # Return as dict with "conventions" key for compatibility
+        return {
+            "conventions": [
+                {"key": c.key, "value": c.value, "source": c.source}
+                for c in conventions
+            ]
+        }
+
     def _select_history(
         self,
         conversation: Optional[ConversationContext],
@@ -299,6 +344,14 @@ class ContextCompiler:
 
         # 3. memory
         memory = self._select_memory(session_memory, plan, user_message)
+
+        # BIP 10.3: Add design conventions to memory if relevant
+        conventions_data = self._extract_conventions_from_plan(
+            session_memory, plan, user_message)
+        if conventions_data:
+            if not isinstance(memory, dict):
+                memory = {}
+            memory.update(conventions_data)
 
         # 4. history
         history = self._select_history(
