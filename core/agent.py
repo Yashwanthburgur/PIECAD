@@ -190,6 +190,10 @@ class CADAgent:
         self._mutation_gate = MutationGate(self._operation_registry)
         self._operation_counter: int = 0
 
+        # BIP 8.3: Bounding-box constraints from user request (e.g., "fit within 100 x 50 x 20 mm")
+        # {"max_x": 100.0, "max_y": 50.0, "max_z": 20.0}
+        self._bbox_constraints: Optional[Dict[str, float]] = None
+
     def _is_transient_error(self, error: RuntimeError) -> bool:
         """Return True if the RuntimeError wraps a transient connection/transport failure.
 
@@ -235,6 +239,42 @@ class CADAgent:
         # being retried and masked. Only explicitly recognised transient
         # indicators (above) are retried.
         return False
+
+    def _extract_bbox_constraints(self, user_message: str) -> Optional[Dict[str, float]]:
+        """Extract explicit bounding-box constraints from user message.
+
+        Looks for patterns like:
+        - "fit within 100 x 50 x 20 mm"
+        - "within 100mm x 50mm x 20mm"
+        - "must fit within 100 x 50 x 20"
+        - "keep within 100x50x20"
+
+        Returns:
+            Dict with max_x, max_y, max_z in mm, or None if no constraints found.
+        """
+        import re
+        text = (user_message or "").lower()
+
+        # Patterns for bounding box constraints
+        # "within 100 x 50 x 20 mm" or "within 100mm x 50mm x 20mm" or "100x50x20"
+        patterns = [
+            r'(?:fit\s+)?within\s+(\d+(?:\.\d+)?)\s*(?:mm|millimeter)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:mm|millimeter)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:mm|millimeter)?',
+            r'(?:fit\s+)?within\s+(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)',
+            r'(\d+(?:\.\d+)?)\s*(?:mm|millimeter)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:mm|millimeter)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:mm|millimeter)?',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                try:
+                    x = float(match.group(1))
+                    y = float(match.group(2))
+                    z = float(match.group(3))
+                    return {"max_x": x, "max_y": y, "max_z": z}
+                except (ValueError, IndexError):
+                    continue
+
+        return None
 
     def _generate_with_retry(
         self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]
@@ -386,6 +426,12 @@ class CADAgent:
         self.conversation.add_user(user_message.strip())
         # Reflect the new task on the DesignState (best-effort, no forced parse).
         self.design_state.current_task = user_message.strip()
+
+        # BIP 8.3: Extract bounding-box constraints from user message
+        self._bbox_constraints = self._extract_bbox_constraints(user_message)
+        if self._bbox_constraints:
+            print(
+                f"[Agent] Bounding-box constraints detected: {self._bbox_constraints}")
 
         # Reset per-turn context telemetry (each handle_message is a new turn).
         self._context_telemetry = []
@@ -974,6 +1020,55 @@ class CADAgent:
                                 # Verification error - log but don't fail the operation
                                 print(
                                     f"[VERIFY] Warning: Face count increase check failed: {e}")
+
+                    # BIP 8.3: Bounding-box verification
+                    # Verify geometry stays within explicit user-specified bounds
+                    if self._bbox_constraints and success:
+                        result_id = args.get("id")
+                        if result_id:
+                            try:
+                                mass_json = self.adapter.execute_command(
+                                    "get_mass_properties", object_name=result_id)
+                                ok = GeometryVerifier.verify_within_bounding_box(
+                                    mass_json,
+                                    self._bbox_constraints.get(
+                                        "max_x", float('inf')),
+                                    self._bbox_constraints.get(
+                                        "max_y", float('inf')),
+                                    self._bbox_constraints.get(
+                                        "max_z", float('inf'))
+                                )
+                                if not ok:
+                                    error_msg = (
+                                        f"Verification failed: Geometry exceeds bounding-box constraints "
+                                        f"X={self._bbox_constraints.get('max_x')}mm "
+                                        f"Y={self._bbox_constraints.get('max_y')}mm "
+                                        f"Z={self._bbox_constraints.get('max_z')}mm"
+                                    )
+                                    print(
+                                        f"\033[91m[VERIFY] {error_msg}\033[0m")
+                                    # Convert success to failure for the agent recovery loop
+                                    success = False
+                                    results[-1] = json.dumps({
+                                        "status": "error",
+                                        "tool": name,
+                                        "error_type": "GeometryVerificationError",
+                                        "error": error_msg,
+                                        "arguments": args,
+                                        "transient": False,
+                                        "retries": 0,
+                                    }, default=str)
+                                    # Mark operation as failed
+                                    self._operation_registry.fail(
+                                        operation_id, "GeometryVerificationError", error_msg)
+                                    # Release mutation gate since we're treating this as failure
+                                    if is_mutation and gate_acquired:
+                                        self._mutation_gate.release(
+                                            operation_id)
+                            except Exception as e:
+                                # Verification error - log but don't fail the operation
+                                print(
+                                    f"[VERIFY] Warning: Bounding-box check failed: {e}")
                 else:
                     if error is None:
                         error = RuntimeError(
