@@ -21,6 +21,7 @@ from core.operations import (
     MutationGate,
     OperationStatus,
 )
+# BIP 10.5: Import locally in _measure_router_savings to allow test patching
 
 # Transient LLM/transport exception types. Imported defensively so the core
 # remains provider-independent: if the openai SDK is unavailable, we fall back
@@ -220,6 +221,10 @@ class CADAgent:
             "ceiling_limit": None,
             "ceiling_reached": False,
         }
+
+        # BIP 10.5: Router token-savings instrumentation.
+        # Records per-step tool-filtering token savings.
+        self._router_token_savings: List[Dict[str, Any]] = []
 
         # BIP 10.3: Session-scoped design conventions memory.
         # These persist across handle_message calls within the same session.
@@ -596,6 +601,9 @@ class CADAgent:
             "ceiling_reached": False,
         }
 
+        # BIP 10.5: Reset router token-savings telemetry for this handle_message call.
+        self._router_token_savings = []
+
         # BIP 10.3: Design conventions are stored in session memory (persisted across turns)
         # They are not reset per handle_message call
 
@@ -685,6 +693,46 @@ class CADAgent:
             )
             # Use compiled tools (which already includes plan + router via compiler._select_tools)
             tools = compiled.tools
+
+            # BIP 10.5: Router token-savings instrumentation.
+            # Measure the token cost difference between ungated (all_tools) and
+            # filtered (compiled.tools) tool schemas. Use the same chars/4
+            # heuristic as the existing context/token infrastructure.
+            # If the compiler telemetry provides exact estimates, use those;
+            # otherwise compute via estimate_json_tokens.
+            try:
+                from core.context.telemetry import estimate_json_tokens
+                ungated_token_count = estimate_json_tokens(all_tools)
+            except Exception:
+                # If estimation fails for any reason, record as unavailable
+                # rather than fabricating a value.
+                ungated_token_count = None
+            try:
+                from core.context.telemetry import estimate_json_tokens
+                filtered_token_count = estimate_json_tokens(tools)
+            except Exception:
+                filtered_token_count = None
+
+            token_savings = None
+            if (ungated_token_count is not None
+                    and filtered_token_count is not None
+                    and ungated_token_count > 0):
+                token_savings = ungated_token_count - filtered_token_count
+                if token_savings < 0:
+                    # Should not happen, but guard against estimation noise.
+                    token_savings = 0
+
+            # Record per-step savings for aggregation in handle_message telemetry.
+            self._router_token_savings.append({
+                "react_step": step + 1,
+                "tools_before_filtering": len(all_tools),
+                "tools_after_filtering": len(tools),
+                "ungated_schema_token_estimate": ungated_token_count,
+                "filtered_schema_token_estimate": filtered_token_count,
+                "token_savings_estimate": token_savings,
+                "estimation_method": "chars/4 heuristic",
+            })
+
             print(
                 f"[Agent] Step {step+1}: {len(tools)}/{len(all_tools)} tools active "
                 f"(capability-routed + plan-required)"
@@ -1664,7 +1712,57 @@ class CADAgent:
         - model: model name (if available)
         - provider: provider name (if available)
         - per_step: list of per-step token breakdowns
+        - ceiling_limit: per-turn token ceiling (None if disabled)
+        - ceiling_reached: whether the ceiling was reached
+        - usage_unavailable_calls: count of LLM calls without usage metadata
+        - router_token_savings: aggregated router filtering savings (BIP 10.5)
 
         Returns empty dict if no LLM calls were made.
         """
-        return self._token_telemetry
+        telemetry = self._token_telemetry.copy()
+        # BIP 10.5: Include aggregated router token savings.
+        if self._router_token_savings:
+            total_savings = sum(
+                s.get("token_savings_estimate") or 0
+                for s in self._router_token_savings
+            )
+            total_ungated = sum(
+                s.get("ungated_schema_token_estimate") or 0
+                for s in self._router_token_savings
+            )
+            total_filtered = sum(
+                s.get("filtered_schema_token_estimate") or 0
+                for s in self._router_token_savings
+            )
+            telemetry["router_token_savings"] = {
+                "total_savings_estimate": total_savings,
+                "total_ungated_estimate": total_ungated,
+                "total_filtered_estimate": total_filtered,
+                "steps_measured": len(self._router_token_savings),
+                "per_step": self._router_token_savings,
+            }
+        else:
+            telemetry["router_token_savings"] = {
+                "total_savings_estimate": 0,
+                "total_ungated_estimate": 0,
+                "total_filtered_estimate": 0,
+                "steps_measured": 0,
+                "per_step": [],
+            }
+        return telemetry
+
+    def get_router_token_savings(self) -> List[Dict[str, Any]]:
+        """Return the per-step router token-savings telemetry (BIP 10.5).
+
+        Returns a list of dicts, one per ReAct step, with:
+        - react_step: step number (1-indexed)
+        - tools_before_filtering: count of all available tools
+        - tools_after_filtering: count of tools after router filtering
+        - ungated_schema_token_estimate: estimated tokens for all tool schemas
+        - filtered_schema_token_estimate: estimated tokens for filtered tool schemas
+        - token_savings_estimate: estimated tokens saved by filtering
+        - estimation_method: method used ("chars/4 heuristic")
+
+        Returns empty list if no steps were measured.
+        """
+        return list(self._router_token_savings)
