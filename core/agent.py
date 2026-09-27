@@ -914,6 +914,66 @@ class CADAgent:
                                 # Verification error - log but don't fail the operation
                                 print(
                                     f"[VERIFY] Warning: Volume reduction check failed: {e}")
+
+                    # BIP 8.2: Operation-specific face-count verification
+                    # Verify face count increase for fillet, chamfer, and pattern operations
+                    elif name in ("fillet", "chamfer", "pattern_linear", "pattern_circular"):
+                        target_id = args.get("target_id")
+                        result_id = args.get("id")
+                        if target_id and result_id:
+                            try:
+                                # Get face count before and after operation
+                                # Note: we need the base object's faces. The target_id may be the base object
+                                # or the result object depending on the operation.
+                                # get_faces returns {"faces": [...], "topology_version": "..."}
+                                # We need to extract the faces array for verification.
+                                base_faces_raw = self.adapter.execute_command(
+                                    "get_faces", object_name=target_id)
+                                result_faces_raw = self.adapter.execute_command(
+                                    "get_faces", object_name=result_id)
+                                # Parse and extract faces array
+                                try:
+                                    base_faces_parsed = json.loads(
+                                        base_faces_raw)
+                                    base_faces = json.dumps(base_faces_parsed.get("faces", []) if isinstance(
+                                        base_faces_parsed, dict) else base_faces_parsed)
+                                except (json.JSONDecodeError, TypeError):
+                                    base_faces = "[]"
+                                try:
+                                    result_faces_parsed = json.loads(
+                                        result_faces_raw)
+                                    result_faces = json.dumps(result_faces_parsed.get("faces", []) if isinstance(
+                                        result_faces_parsed, dict) else result_faces_parsed)
+                                except (json.JSONDecodeError, TypeError):
+                                    result_faces = "[]"
+                                ok, reason = GeometryVerifier.verify_face_count_increase(
+                                    base_faces, result_faces)
+                                if not ok:
+                                    error_msg = f"Verification failed: {reason}"
+                                    print(
+                                        f"\033[91m[VERIFY] {error_msg}\033[0m")
+                                    # Convert success to failure for the agent recovery loop
+                                    success = False
+                                    results[-1] = json.dumps({
+                                        "status": "error",
+                                        "tool": name,
+                                        "error_type": "GeometryVerificationError",
+                                        "error": error_msg,
+                                        "arguments": args,
+                                        "transient": False,
+                                        "retries": 0,
+                                    }, default=str)
+                                    # Mark operation as failed
+                                    self._operation_registry.fail(
+                                        operation_id, "GeometryVerificationError", error_msg)
+                                    # Release mutation gate since we're treating this as failure
+                                    if is_mutation and gate_acquired:
+                                        self._mutation_gate.release(
+                                            operation_id)
+                            except Exception as e:
+                                # Verification error - log but don't fail the operation
+                                print(
+                                    f"[VERIFY] Warning: Face count increase check failed: {e}")
                 else:
                     if error is None:
                         error = RuntimeError(
