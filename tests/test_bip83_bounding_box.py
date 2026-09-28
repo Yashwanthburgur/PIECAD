@@ -208,7 +208,13 @@ class BoundingBoxTrackingStubAdapter(CADAdapter):
             bbox = self.bounding_boxes.get(obj_name, {
                 "XMin": 0, "XMax": 100, "YMin": 0, "YMax": 50, "ZMin": 0, "ZMax": 20
             })
-            return json.dumps({"Volume": 1000.0, "bounding_box": bbox})
+            # Include properties for parameter verification (BIP 11.1)
+            props = {}
+            for obj in self.objects:
+                if obj.get("id") == obj_name:
+                    props = obj.get("properties", {})
+                    break
+            return json.dumps({"Volume": 1000.0, "bounding_box": bbox, "properties": props})
 
         if tool_name == "get_state":
             return json.dumps(self.objects)

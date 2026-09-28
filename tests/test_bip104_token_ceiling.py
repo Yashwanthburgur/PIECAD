@@ -77,7 +77,8 @@ class MockProvider(LLMProvider):
 
 class MockAdapter(CADAdapter):
     def __init__(self):
-        self.tool_names = ["box", "get_state", "get_faces", "get_edges"]
+        self.tool_names = ["box", "get_state", "get_faces",
+                           "get_edges", "get_mass_properties"]
         self.state = '[]'
         self.calls = []
 
@@ -91,12 +92,18 @@ class MockAdapter(CADAdapter):
         self.calls.append((tool_name, kwargs))
         if tool_name == "box":
             self.state = json.dumps([{"id": "box1", "type": "Part::Box", "visible": True, "parents": [
-            ], "children": [], "properties": {}}])
+            ], "children": [], "properties": {"Length": 100, "Width": 50, "Height": 20}}])
             return "ok"
         elif tool_name == "get_faces":
             return json.dumps({"faces": ["face1", "face2"], "topology_version": "1"})
         elif tool_name == "get_edges":
             return json.dumps({"edges": ["edge1", "edge2"], "topology_version": "1"})
+        elif tool_name == "get_mass_properties":
+            obj_name = kwargs.get("object_name", "")
+            # Include properties for parameter verification (BIP 11.1)
+            props = {"Length": 100, "Width": 50,
+                     "Height": 20} if obj_name == "box1" else {}
+            return json.dumps({"Volume": 100000.0, "volume": 100000.0, "properties": props})
         return "ok"
 
 

@@ -241,7 +241,14 @@ class FaceCountTrackingStubAdapter(CADAdapter):
             return json.dumps(self.objects)
 
         if tool_name == "get_mass_properties":
-            return json.dumps({"Volume": 1000.0, "volume": 1000.0})
+            obj_name = kwargs.get("object_name", "")
+            # Include properties for parameter verification (BIP 11.1)
+            props = {}
+            for obj in self.objects:
+                if obj.get("id") == obj_name:
+                    props = obj.get("properties", {})
+                    break
+            return json.dumps({"Volume": 1000.0, "volume": 1000.0, "properties": props})
 
         if tool_name in ("get_edges",):
             return json.dumps({"edges": [], "topology_version": "1"})

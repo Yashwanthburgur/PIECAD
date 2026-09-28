@@ -224,7 +224,13 @@ class VolumeTrackingStubAdapter(CADAdapter):
         if tool_name == "get_mass_properties":
             obj_name = kwargs.get("object_name", "")
             vol = self.volumes.get(obj_name, 1000.0)
-            return json.dumps({"Volume": vol, "volume": vol})
+            # Include properties for parameter verification (BIP 11.1)
+            props = {}
+            for obj in self.objects:
+                if obj.get("id") == obj_name:
+                    props = obj.get("properties", {})
+                    break
+            return json.dumps({"Volume": vol, "volume": vol, "properties": props})
 
         if tool_name == "get_state":
             return json.dumps(self.objects)

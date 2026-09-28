@@ -348,9 +348,16 @@ class MateTrackingStubAdapter(CADAdapter):
             return json.dumps(self.objects)
 
         if tool_name == "get_mass_properties":
+            obj_name = kwargs.get("object_name", "")
+            # Include properties for parameter verification (BIP 11.1)
+            props = {}
+            for obj in self.objects:
+                if obj.get("id") == obj_name:
+                    props = obj.get("properties", {})
+                    break
             return json.dumps({"Volume": 1000.0, "bounding_box": {
                 "XMin": 0, "XMax": 100, "YMin": 0, "YMax": 50, "ZMin": 0, "ZMax": 20
-            }})
+            }, "properties": props})
 
         return "ok"
 
