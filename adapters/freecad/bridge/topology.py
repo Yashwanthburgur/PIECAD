@@ -136,12 +136,12 @@ def _impl_get_faces(obj_name: str):
             "normal": normal
         })
 
-    # Include topology version for stale reference detection (BIP 4.3.4)
-    # Use hash of face count + areas as a simple version proxy
-    # In a full implementation, FreeCAD's Shape hashCode could be used
+    # Include topology version for stale reference detection (BIP 4.3.4 / 9.2-hardening).
+    # Hash the full ORDERED per-face signatures (center, area, normal), not just
+    # count + summed area: two different geometries with equal aggregate
+    # statistics (e.g. swapped symmetric faces) must NOT collide.
     import hashlib
-    version_data = f"{len(faces_data)}:{sum(f['area'] for f in faces_data)}".encode(
-    )
+    version_data = json.dumps(faces_data, sort_keys=True).encode()
     topology_version = hashlib.md5(version_data).hexdigest()[:16]
 
     return {"faces": faces_data, "topology_version": topology_version}
@@ -191,10 +191,11 @@ def _impl_get_edges(obj_name: str):
             "tangent": tangent
         })
 
-    # Include topology version for stale reference detection (BIP 4.3.4)
+    # Include topology version for stale reference detection (BIP 4.3.4 / 9.2-hardening).
+    # Hash the full ORDERED per-edge signatures (center, length, tangent), not
+    # just count + summed length (collision-prone aggregate).
     import hashlib
-    version_data = f"{len(edges_data)}:{sum(e['length'] for e in edges_data)}".encode(
-    )
+    version_data = json.dumps(edges_data, sort_keys=True).encode()
     topology_version = hashlib.md5(version_data).hexdigest()[:16]
 
     return {"edges": edges_data, "topology_version": topology_version}

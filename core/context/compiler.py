@@ -233,16 +233,55 @@ class ContextCompiler:
         if not convention_requested and not implicit_request:
             return {}
 
-        # Get conventions from session memory
-        conventions = session_memory.by_kind("convention")
+        # Get conventions from session memory, filtered per-entry by relevance.
+        # Dumping every convention whenever a vaguely-related keyword appears in
+        # the request leaks unrelated conventions (e.g. a "3mm slot" convention
+        # into an "M6 hole" request). Rules:
+        #   - an explicit "default ..." request means the user is asking for
+        #     whatever the session defaults are -> include ALL conventions
+        #     (their whole purpose is to be applied on default-requests);
+        #   - otherwise keep only entries relevant to this specific message,
+        #     reusing the memory layer's own per-entry relevance selection.
+        from .memory import KIND_CONVENTION
+        conventions = session_memory.by_kind(KIND_CONVENTION)
         if not conventions:
             return {}
+
+        if "default" in (user_message or "").lower():
+            matched = list(conventions)
+        else:
+            relevant = session_memory.relevant(user_message)
+            relevant_values = set()
+            for v in relevant.get(KIND_CONVENTION, []) or []:
+                relevant_values.add(str(v))
+
+            matched = [
+                c for c in conventions
+                if str(c.value) in relevant_values
+                or any(
+                    tok in (c.key or "").lower() or tok in str(c.value).lower()
+                    for tok in ((user_message or "").lower().split())
+                    if len(tok) >= 3
+                )
+            ]
+        if not matched:
+            # Explicit-policy fallback ONLY when the plan explicitly requested the
+            # conventions section AND no entry carried any discriminative signal
+            # for this message. A generic request ("test") with an explicitly
+            # required "conventions" section means "apply session conventions";
+            # a discriminative message with partial matches never falls through
+            # here because `matched` is non-empty, so unrelated entries still
+            # cannot leak alongside relevant ones.
+            if convention_requested:
+                matched = list(conventions)
+            else:
+                return {}
 
         # Return as dict with "conventions" key for compatibility
         return {
             "conventions": [
                 {"key": c.key, "value": c.value, "source": c.source}
-                for c in conventions
+                for c in matched
             ]
         }
 

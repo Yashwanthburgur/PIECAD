@@ -245,21 +245,28 @@ class DesignState:
     def increment_topology_version(self, object_id: str) -> str:
         """Invalidate the recorded topology fingerprint for an object.
 
-        Called after a topology-altering operation (fillet, chamfer, boolean, etc.)
-        on the target object. The authoritative topology fingerprint is the
-        deterministic hash computed by the CAD bridge (see get_edges/get_faces),
-        so DesignState must NOT invent a local version that could disagree with it.
+        Called after a topology-altering operation (fillet, chamfer, boolean,
+        etc.) on the target object.
 
-        We therefore drop the previously-recorded fingerprint. This means:
-          - get_topology_version() returns the "0" unknown sentinel until the
-            next get_edges/get_faces records the bridge's authoritative value, and
-          - is_reference_stale() correctly reports any previously-emitted
-            references as stale, forcing a bridge refresh before further use.
+        Semantics: the authoritative *content* fingerprint remains the
+        deterministic hash computed by the CAD bridge (see get_edges/get_faces);
+        DesignState never fabricates such a hash. Instead, invalidation replaces
+        any previously recorded fingerprint bridge-hash with a locally unique
+        "invalidated-N" marker. The marker:
+          - is a distinct string on every call (so is_reference_stale() and the
+            post-operation reference check correctly observe a version *change*),
+          - can never accidentally equal a bridge fingerprint that would
+            re-validate an already-emitted reference, and
+          - is overwritten by the bridge's authoritative hash on the next
+            get_edges/get_faces recording.
 
-        Returns the current (post-invalidation) version for convenience.
+        Returns the new invalidation marker.
         """
-        self.topology_versions.pop(object_id, None)
-        return self.get_topology_version(object_id)
+        self._topology_invalidation_counter = getattr(
+            self, "_topology_invalidation_counter", 0) + 1
+        marker = f"invalidated-{self._topology_invalidation_counter}"
+        self.topology_versions[object_id] = marker
+        return marker
 
     def record_topology_reference(self, object_id: str, ref_type: str,
                                   version: str) -> None:

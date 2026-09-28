@@ -144,6 +144,10 @@ REACT_LOOP_INJECTION = """You are in a multi-step ReAct loop. DO NOT output conv
 class CADAgent:
     MAX_RETRIES = 3
     MAX_STEPS = 15
+    # BIP 10.4b: Overall wall-clock deadline for a single handle_message call.
+    # Bounds the whole ReAct turn (not just one provider/CAD call). None disables.
+    MAX_TURN_SECONDS: Optional[float] = 600.0
+    TURN_DEADLINE_TERMINATION_REASON = "turn_deadline"
     # BIP 10.4: Hard ceiling on total provider-reported LLM tokens consumed
     # within a single handle_message() call. ``None`` disables enforcement.
     MAX_TOKENS_PER_TURN: Optional[int] = 100000
@@ -325,14 +329,28 @@ class CADAgent:
                     self.record_design_convention(key, value, source="user")
                     break
 
-    def _is_transient_error(self, error: RuntimeError) -> bool:
-        """Return True if the RuntimeError wraps a transient connection/transport failure.
+    # Deterministic CAD-kernel failure markers. A kernel/geometry failure is
+    # NEVER transient, even when its message happens to contain a transient-
+    # looking word (e.g. "Shape heal timeout", "Recompute Failed ... timeout").
+    _KERNEL_FAILURE_MARKERS = (
+        "kernel", "brep_api", "brep", "command not done", "invalid geometry",
+        "failed to compute", "recompute failed", "makethickness",
+        "shape.isvalid", "self-intersect", "self intersect",
+        "null shape", "no valid geometry", "topology references",
+    )
 
-        The FreeCADAdapter wraps xmlrpc.client.ProtocolError, ConnectionError, and OSError
-        into RuntimeError. We check the error message for indicators of transient failures.
+    def _is_transient_error(self, error: RuntimeError) -> bool:
+        """Return True only for genuine transport/connection failures.
+
+        Kernel/geometry failures are deterministic and must never be retried as
+        transport errors merely because their message contains "timeout". We
+        therefore apply a NEGATIVE filter first: if the error carries a
+        CAD-kernel failure marker, it is non-transient regardless of other
+        keywords.
         """
         msg = str(error).lower()
-        # Connection-related transient indicators (covers XML-RPC and direct connection errors)
+        if any(marker in msg for marker in self._KERNEL_FAILURE_MARKERS):
+            return False
         transient_indicators = [
             "connection", "reset", "refused", "timeout", "unreachable",
             "broken pipe", "connection aborted", "connection lost",
@@ -515,33 +533,130 @@ class CADAgent:
         )
 
     def _check_pending_operations_against_state(self, state_objects: List[Dict[str, Any]]) -> None:
-        """BIP 7.0: Check if any unresolved operations have late-completed.
+        """BIP 7.0: Check whether any unresolved operations have late-completed.
 
-        When a mutation operation times out, it's tracked in the OperationRegistry as UNRESOLVED.
-        If state refresh shows the target object now exists, the operation may have
-        completed late. We reconcile the operation and log for audit.
+        Safety rule: UNKNOWN != SUCCESS. Mere existence of ``target_id`` is NOT
+        completion evidence (for feature operations the target existed before
+        the operation started). Completion must be proven from the operation's
+        own semantics:
+
+        - feature-producing ops (fillet/chamfer/hole/boolean/shell/patterns/
+          extrude): completed iff the REQUESTED result id (args["id"]) exists in
+          the refreshed state, and its type agrees with the tool.
+        - box/cylinder: completed iff the requested id exists AND the live
+          dimensional properties match the requested values.
+        - edit_feature: completed iff the target exists AND every requested
+          parameter in args["parameters"] matches the live property value.
+        - delete_feature: completed iff the target is ABSENT from state.
+        - mate / sketch and any op without positive evidence: stay UNRESOLVED.
 
         Args:
             state_objects: List of object dicts from current CAD state
         """
-        existing_ids = {obj.get("id")
-                        for obj in state_objects if isinstance(obj, dict)}
+        objects_by_id = {
+            obj.get("id"): obj
+            for obj in state_objects if isinstance(obj, dict)
+        }
+        existing_ids = set(objects_by_id)
 
-        # Get all unresolved operations from the registry
+        # Ops that produce a NEW feature object named by args["id"]; the
+        # expected FreeCAD object type of that result, used as corroborating
+        # evidence when available in state.
+        feature_ops_result_type = {
+            "fillet": ("Part::Fillet",),
+            "chamfer": ("Part::Chamfer",),
+            "boolean": ("Part::Cut", "Part::MultiFuse", "Part::MultiCommon"),
+            "hole": ("Part::Cut",),
+            "shell": ("Part::Feature", "Part::Thickness"),
+            "pattern_linear": ("Part::Feature",),
+            "pattern_circular": ("Part::Feature",),
+            "extrude": ("Part::Pad", "Part::Pocket", "Part::Feature"),
+            "sketch": ("Sketcher::SketchObject",),
+        }
+        primitive_ops = {"box", "cylinder"}
+
+        def _props_match(obj: Dict[str, Any], expected: Dict[str, Any]) -> bool:
+            props = obj.get("properties") or {}
+            for key, want in expected.items():
+                if key in ("id", "target_id", "tool_id", "mode", "origin"):
+                    continue
+                live_raw = props.get(key)
+                if live_raw is None or want is None:
+                    return False
+                try:
+                    live = float(live_raw)
+                    want_f = float(want)
+                except (TypeError, ValueError):
+                    continue
+                if abs(live - want_f) > 1e-6:
+                    return False
+            return True
+
         unresolved = self._operation_registry.get_unresolved()
         for op_id, record in unresolved.items():
+            tool = record.tool
             target_id = record.target_id
             feature_id = record.args.get("id")
-            # Check if either the target or the new feature ID exists in state
-            if (target_id and target_id in existing_ids) or (feature_id and feature_id in existing_ids):
-                print(f"[LateCompletion] Operation {op_id} ({record.tool}) may have completed late. "
-                      f"Target/feature found in state. Reconciling.")
-                # Mark late completion detected
+
+            evidence = None  # "completed" | None (= stays unresolved)
+
+            if tool in feature_ops_result_type:
+                # Completion evidence: the requested result object exists and
+                # (when type info is available) has a plausible result type.
+                if feature_id and feature_id in existing_ids:
+                    obj = objects_by_id[feature_id]
+                    expected_types = feature_ops_result_type[tool]
+                    live_type = str(obj.get("type") or "")
+                    if not expected_types or any(
+                            t in live_type for t in expected_types):
+                        evidence = "completed"
+            elif tool in primitive_ops:
+                if feature_id and feature_id in existing_ids:
+                    obj = objects_by_id[feature_id]
+                    expected: Dict[str, Any] = {}
+                    if tool == "box":
+                        expected = {"Length": record.args.get("length"),
+                                    "Width": record.args.get("width"),
+                                    "Height": record.args.get("height")}
+                    else:
+                        expected = {"Radius": record.args.get("radius"),
+                                    "Height": record.args.get("height")}
+                    expected = {k: v for k, v in expected.items()
+                                if v is not None}
+                    if expected and _props_match(obj, expected):
+                        evidence = "completed"
+            elif tool == "edit_feature":
+                params = record.args.get("parameters") or {}
+                if target_id and target_id in existing_ids and params:
+                    obj = objects_by_id[target_id]
+                    props = obj.get("properties") or {}
+                    if all(
+                        k in props
+                        and abs(float(props[k]) - float(v)) <= 1e-6
+                        for k, v in params.items()
+                        if isinstance(v, (int, float))
+                    ):
+                        evidence = "completed"
+            elif tool == "delete_feature":
+                gone_id = record.args.get("target_feature_id") or target_id
+                if gone_id and gone_id not in existing_ids:
+                    evidence = "completed"
+            # mate and any unrecognised tool: no positive evidence possible from
+            # a state listing alone -> remain UNRESOLVED.
+
+            if evidence == "completed":
+                print(f"[LateCompletion] Operation {op_id} ({record.tool}) "
+                      f"late-completed: semantic evidence found in refreshed "
+                      f"state. Reconciling as completed.")
                 self._operation_registry.mark_late_completion(op_id)
-                # Reconcile as "completed" - the object exists in state
                 self._operation_registry.reconcile(op_id, "completed")
-                # Release the mutation gate for this operation
                 self._mutation_gate.force_release_for_reconciliation(op_id)
+            else:
+                # UNKNOWN stays UNRESOLVED: the logical mutation barrier is
+                # preserved until genuine completion evidence appears.
+                print(f"[LateCompletion] Operation {op_id} ({record.tool}) "
+                      f"still unresolved after state refresh: no completion "
+                      f"evidence. Barrier maintained.")
 
     def get_context_telemetry(self) -> List[Dict[str, Any]]:
         """Return recorded per-LLM-call context telemetry (estimate flags set).
@@ -617,9 +732,36 @@ class CADAgent:
         if self._capture_trace:
             self._trace = []
 
+        # BIP 10.4b: overall turn deadline start time.
+        turn_start = time.time()
+
         # Multi-step ReAct loop: max 10 steps to prevent infinite looping
         for step in range(self.MAX_STEPS):
             print(f"\n=== [ReAct Step {step+1}/{self.MAX_STEPS}] ===")
+
+            # BIP 10.4b: enforce the overall wall-clock deadline BEFORE starting
+            # another step. Does NOT kill an in-flight CAD mutation thread (that
+            # would falsely imply the operation stopped); any unresolved
+            # mutation stays tracked by the OperationRegistry/barrier.
+            if (self.MAX_TURN_SECONDS is not None
+                    and (time.time() - turn_start) > self.MAX_TURN_SECONDS):
+                fail_msg = (
+                    f"Operation stopped: overall turn deadline "
+                    f"({self.MAX_TURN_SECONDS:.0f}s) reached at step "
+                    f"{step + 1}. The CAD state may reflect completed earlier "
+                    f"steps; any unresolved mutation remains tracked and must "
+                    f"be reconciled before further mutation.")
+                print(f"\033[91m[ERROR] {fail_msg}\033[0m")
+                self.history.append({"role": "assistant", "content": fail_msg})
+                self.conversation.add_assistant(fail_msg)
+                if self._capture_trace:
+                    self._trace.append({
+                        "step": step + 1,
+                        "type": "turn_deadline_reached",
+                        "message": fail_msg,
+                        "termination_reason": self.TURN_DEADLINE_TERMINATION_REASON,
+                    })
+                return fail_msg, session_tools
 
             # 1. Ask adapter for its active tools
             all_tools = self.adapter.get_tools()
@@ -1356,32 +1498,82 @@ class CADAgent:
                                 print(
                                     f"[VERIFY] Warning: Bounding-box check failed: {e}")
 
-                    # BIP 8.4: Mate verification
-                    # Verify the geometric relationship produced by mate operations
+                    # BIP 8.4: Mate verification.
+                    # Verify the geometric relationship produced by mate
+                    # operations. The verifier must receive the SPECIFIC
+                    # referenced face/edge dicts, not the raw get_faces/get_edges
+                    # wrapper payload ({"faces": [...], "topology_version": ...}).
                     if name == "mate" and success:
                         mate_type = args.get("mate_type", "").strip().lower()
                         moving_target = args.get("moving_target")
                         moving_ref = args.get("moving_ref")
                         fixed_target = args.get("fixed_target")
                         fixed_ref = args.get("fixed_ref")
+
+                        def _pick_ref(wrapper_raw, refs_key, ref_id_key, ref_id):
+                            """Extract one referenced face/edge dict from a
+                            get_faces/get_edges wrapper payload. Returns None
+                            when the specific reference cannot be resolved."""
+                            try:
+                                parsed = json.loads(wrapper_raw) if isinstance(
+                                    wrapper_raw, str) else wrapper_raw
+                            except (json.JSONDecodeError, TypeError):
+                                return None
+                            entries = None
+                            if isinstance(parsed, dict) and isinstance(
+                                    parsed.get(refs_key), list):
+                                entries = parsed[refs_key]
+                            elif isinstance(parsed, list):
+                                entries = parsed
+                            elif isinstance(parsed, dict) and ref_id_key in parsed:
+                                return parsed  # already a single ref dict
+                            if not entries:
+                                return None
+                            ref_s = str(ref_id)
+                            for e in entries:
+                                if isinstance(e, dict) and str(
+                                        e.get(ref_id_key)) == ref_s:
+                                    return e
+                            return None
+
                         if moving_target and moving_ref and fixed_target and fixed_ref:
                             try:
                                 if mate_type == "coincident":
                                     # Get face data for both mated faces
-                                    moving_face = self.adapter.execute_command(
+                                    moving_face_raw = self.adapter.execute_command(
                                         "get_faces", object_name=moving_target)
-                                    fixed_face = self.adapter.execute_command(
+                                    fixed_face_raw = self.adapter.execute_command(
                                         "get_faces", object_name=fixed_target)
-                                    ok, reason = GeometryVerifier.verify_mate_coincident(
-                                        moving_face, fixed_face)
+                                    m = _pick_ref(moving_face_raw, "faces",
+                                                  "face_id", moving_ref)
+                                    f = _pick_ref(fixed_face_raw, "faces",
+                                                  "face_id", fixed_ref)
+                                    if m is None or f is None:
+                                        ok, reason = False, (
+                                            f"mated face reference not found in "
+                                            f"topology (moving={moving_ref!r}, "
+                                            f"fixed={fixed_ref!r})")
+                                    else:
+                                        ok, reason = GeometryVerifier.verify_mate_coincident(
+                                            json.dumps(m), json.dumps(f))
                                 elif mate_type == "concentric":
                                     # Get edge data for both mated edges
-                                    moving_edge = self.adapter.execute_command(
+                                    moving_edge_raw = self.adapter.execute_command(
                                         "get_edges", object_name=moving_target)
-                                    fixed_edge = self.adapter.execute_command(
+                                    fixed_edge_raw = self.adapter.execute_command(
                                         "get_edges", object_name=fixed_target)
-                                    ok, reason = GeometryVerifier.verify_mate_concentric(
-                                        moving_edge, fixed_edge)
+                                    m = _pick_ref(moving_edge_raw, "edges",
+                                                  "edge_id", moving_ref)
+                                    f = _pick_ref(fixed_edge_raw, "edges",
+                                                  "edge_id", fixed_ref)
+                                    if m is None or f is None:
+                                        ok, reason = False, (
+                                            f"mated edge reference not found in "
+                                            f"topology (moving={moving_ref!r}, "
+                                            f"fixed={fixed_ref!r})")
+                                    else:
+                                        ok, reason = GeometryVerifier.verify_mate_concentric(
+                                            json.dumps(m), json.dumps(f))
                                 else:
                                     ok, reason = True, f"mate type '{mate_type}' not verified (unsupported)"
 

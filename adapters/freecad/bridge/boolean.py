@@ -7,7 +7,10 @@ import FreeCAD as App
 import FreeCADGui as Gui
 import Part
 
-from ._common import _active_doc, _sync, _impl_set_visible
+from ._common import (
+    _active_doc, _sync, _impl_set_visible,
+    _op_fingerprint, _op_stamp, _op_existing_matches,
+)
 
 # Standard tap drill minor diameters in millimetres.
 # Industrial tapped holes are modelled as tap-drill holes with persistent
@@ -85,37 +88,72 @@ def _impl_boolean(operation: str, base_obj: str, tool_obj: str, result_name: str
     if tool is None:
         raise ValueError(f"Tool object not found: {tool_obj}")
 
-    if operation == "subtract":
-        new_obj = doc.addObject("Part::Cut", result_name)
-        new_obj.Base = base
-        new_obj.Tool = tool
-    elif operation == "union":
-        new_obj = doc.addObject("Part::MultiFuse", result_name)
-        new_obj.Shapes = [base, tool]
-    elif operation == "intersect":
-        new_obj = doc.addObject("Part::MultiCommon", result_name)
-        new_obj.Shapes = [base, tool]
-    else:
-        raise ValueError(f"Unknown boolean operation: {operation}")
+    # Operation-identity idempotency: identical retry converges; id collision
+    # with a DIFFERENT boolean is rejected (no silent overwrite).
+    fingerprint = _op_fingerprint("boolean", {
+        "operation": str(operation), "base_obj": base_obj,
+        "tool_obj": tool_obj,
+    })
+    exists, matches, existing = _op_existing_matches(
+        doc, result_name, fingerprint)
+    if exists:
+        if matches:
+            _sync(doc)
+            return (f"Boolean '{result_name}' already existed with identical "
+                    f"parameters; reusing it (idempotent retry).")
+        raise RuntimeError(
+            f"Object '{result_name}' already exists but represents a DIFFERENT "
+            f"boolean operation. Refusing to silently overwrite it.")
 
-    # Hide the original objects
+    tx_open = False
     try:
-        doc.getObject(base_obj).Visibility = False
+        doc.openTransaction(f"boolean:{result_name}")
+        tx_open = True
     except Exception:
-        pass
-    try:
-        doc.getObject(tool_obj).Visibility = False
-    except Exception:
-        pass
+        tx_open = False
 
-    # Make the new feature visible as the current design tip
     try:
-        if hasattr(new_obj, "ViewObject") and new_obj.ViewObject:
-            new_obj.ViewObject.Visibility = True
-    except Exception:
-        pass
+        if operation == "subtract":
+            new_obj = doc.addObject("Part::Cut", result_name)
+            new_obj.Base = base
+            new_obj.Tool = tool
+        elif operation == "union":
+            new_obj = doc.addObject("Part::MultiFuse", result_name)
+            new_obj.Shapes = [base, tool]
+        elif operation == "intersect":
+            new_obj = doc.addObject("Part::MultiCommon", result_name)
+            new_obj.Shapes = [base, tool]
+        else:
+            raise ValueError(f"Unknown boolean operation: {operation}")
+        _op_stamp(new_obj, fingerprint)
 
-    _sync(doc)
+        # Hide the original objects
+        try:
+            doc.getObject(base_obj).Visibility = False
+        except Exception:
+            pass
+        try:
+            doc.getObject(tool_obj).Visibility = False
+        except Exception:
+            pass
+
+        # Make the new feature visible as the current design tip
+        try:
+            if hasattr(new_obj, "ViewObject") and new_obj.ViewObject:
+                new_obj.ViewObject.Visibility = True
+        except Exception:
+            pass
+
+        _sync(doc)
+        if tx_open:
+            doc.commitTransaction()
+    except Exception:
+        if tx_open:
+            try:
+                doc.abortTransaction()
+            except Exception:
+                pass
+        raise
     return f"Successfully performed '{operation}' on '{base_obj}' and '{tool_obj}' as '{new_obj.Name}'."
 
 
@@ -153,53 +191,82 @@ def _impl_hole(id: str, target_id: str, origin: dict, direction: dict, diameter:
 
     eff_radius = eff_diameter / 2.0
 
-    # Generate the drill bit as a PARAMETRIC Part::Cylinder object so that
-    # downstream edit_feature calls can resize it via Radius/Height.
-    tool_obj = doc.addObject("Part::Cylinder", f"{id}_drill")
-    tool_obj.Radius = eff_radius
+    # Operation-identity idempotency. A hole creates BOTH `{id}` (Part::Cut)
+    # and `{id}_drill` (Part::Cylinder); a timed-out retry must converge on
+    # that pair, and an id collision with a DIFFERENT hole must be rejected.
+    fingerprint = _op_fingerprint("hole", {
+        "target_id": target_id, "origin": origin, "direction": direction,
+        "diameter": float(eff_diameter), "depth": float(depth),
+        "kind": str(kind), "thread_spec": canonical_thread_spec,
+    })
+    exists, matches, existing = _op_existing_matches(doc, id, fingerprint)
+    if exists:
+        if matches:
+            _sync(doc)
+            return (f"Hole '{id}' already existed with identical parameters; "
+                    f"reusing it (idempotent retry).")
+        raise RuntimeError(
+            f"Object '{id}' already exists but represents a DIFFERENT hole "
+            f"operation. Refusing to silently overwrite it.")
 
-    # Coplanar-face hardening: extend the drill 2.0mm past the requested
-    # depth and back its base off 1.0mm along the negative direction vector,
-    # so it cleanly breaches the entry face instead of failing the boolean
-    # subtraction on coincident (coplanar) faces ("just a mark" bug).
-    tool_obj.Height = float(depth) + 2.0
-
-    placement = App.Placement()
-    placement.Base = c_origin - c_dir_norm * 1.0
-    # Rotate the cylinder's local +Z axis onto the drill direction vector.
-    placement.Rotation = App.Rotation(App.Vector(0, 0, 1), c_dir_norm)
-    tool_obj.Placement = placement
-
-    # Execute the boolean cut
-    cut_obj = doc.addObject("Part::Cut", id)
-    cut_obj.Base = target_obj
-    cut_obj.Tool = tool_obj
-
-    _impl_set_visible(target_obj, False)
-    _impl_set_visible(tool_obj, False)
-
-    # Make the new feature visible as the current design tip
+    tx_open = False
     try:
-        if hasattr(cut_obj, "ViewObject") and cut_obj.ViewObject:
-            cut_obj.ViewObject.Visibility = True
+        doc.openTransaction(f"hole:{id}")
+        tx_open = True
     except Exception:
-        pass
+        tx_open = False
 
-    # Persist mechanical thread metadata on the resulting feature.
-    if kind == "tapped":
-        if not hasattr(cut_obj, "ThreadSpec"):
-            cut_obj.addProperty("App::PropertyString",
-                                "ThreadSpec", "Mechanical")
-        cut_obj.ThreadSpec = canonical_thread_spec
-
-    # Make the new feature visible as the current design tip
     try:
-        if hasattr(cut_obj, "ViewObject") and cut_obj.ViewObject:
-            cut_obj.ViewObject.Visibility = True
-    except Exception:
-        pass
+        # Generate the drill bit as a PARAMETRIC Part::Cylinder object so that
+        # downstream edit_feature calls can resize it via Radius/Height.
+        tool_obj = doc.addObject("Part::Cylinder", f"{id}_drill")
+        tool_obj.Radius = eff_radius
 
-    _sync(doc)
+        # Coplanar-face hardening: extend the drill 2.0mm past the requested
+        # depth and back its base off 1.0mm along the negative direction vector,
+        # so it cleanly breaches the entry face instead of failing the boolean
+        # subtraction on coincident (coplanar) faces ("just a mark" bug).
+        tool_obj.Height = float(depth) + 2.0
+
+        placement = App.Placement()
+        placement.Base = c_origin - c_dir_norm * 1.0
+        # Rotate the cylinder's local +Z axis onto the drill direction vector.
+        placement.Rotation = App.Rotation(App.Vector(0, 0, 1), c_dir_norm)
+        tool_obj.Placement = placement
+
+        # Execute the boolean cut
+        cut_obj = doc.addObject("Part::Cut", id)
+        cut_obj.Base = target_obj
+        cut_obj.Tool = tool_obj
+        _op_stamp(cut_obj, fingerprint)
+
+        _impl_set_visible(target_obj, False)
+        _impl_set_visible(tool_obj, False)
+
+        # Make the new feature visible as the current design tip
+        try:
+            if hasattr(cut_obj, "ViewObject") and cut_obj.ViewObject:
+                cut_obj.ViewObject.Visibility = True
+        except Exception:
+            pass
+
+        # Persist mechanical thread metadata on the resulting feature.
+        if kind == "tapped":
+            if not hasattr(cut_obj, "ThreadSpec"):
+                cut_obj.addProperty("App::PropertyString",
+                                    "ThreadSpec", "Mechanical")
+            cut_obj.ThreadSpec = canonical_thread_spec
+
+        _sync(doc)
+        if tx_open:
+            doc.commitTransaction()
+    except Exception:
+        if tx_open:
+            try:
+                doc.abortTransaction()
+            except Exception:
+                pass
+        raise
 
     if kind == "tapped":
         return (

@@ -104,6 +104,9 @@ class _MCPWorker:
             self._connected = True
 
     async def _connect(self):
+        # Invalidate cached tools on (re)connect so a new schema set from the
+        # MCP server is picked up on the next get_tools() call.
+        self._cached_tools = None
         if self._mcp_client._session is None:
             connected = await self._mcp_client.connect()
             if not connected:
@@ -331,6 +334,47 @@ class FreeCADAdapter(CADAdapter):
             }
             self.design_state.require_valid_topology_reference(
                 target_id, "edge", ref_id, current_signature)
+
+    def _check_mutation_target_live(self, tool_name: str, target_id: str) -> Optional[str]:
+        """Reject mutations against hidden/consumed ("ghost") objects.
+
+        A consumed object (hidden because a downstream feature replaced it as
+        design tip) is not a valid mutation target: operating on it would
+        perform a geometrically valid but semantically wrong operation against
+        obsolete geometry. Read-only topology/history queries may still inspect
+        ghosts, so this check is applied only on mutating calls.
+
+        Returns None if the target is live/unknown (permissive when the state
+        cannot be inspected), or a structured error JSON string to return to
+        the caller instead of executing the mutation.
+        """
+        design_state = getattr(self, "design_state", None)
+        if design_state is None or not target_id:
+            return None
+        obj = design_state.get_object(str(target_id))
+        if obj is None:
+            return None  # Unknown liveness: leave existence checks to bridge.
+        if obj.visible:
+            return None
+        # Ghost: try to resolve to a visible descendant (live tip of lineage).
+        resolved = design_state.resolve_active_object(str(target_id))
+        if resolved is not None and resolved.object_id != str(target_id) and resolved.visible:
+            return json.dumps({
+                "success": False,
+                "error_type": "GhostTargetError",
+                "error": (f"Target '{target_id}' is a consumed (hidden) object in "
+                          f"'{tool_name}'. It has been superseded by visible "
+                          f"descendant '{resolved.object_id}'. Retry the "
+                          f"operation against '{resolved.object_id}' instead."),
+                "resolved_target_id": resolved.object_id,
+            })
+        return json.dumps({
+            "success": False,
+            "error_type": "GhostTargetError",
+            "error": (f"Target '{target_id}' is a consumed (hidden) object in "
+                      f"'{tool_name}' and has no visible live descendant. "
+                      f"You must not mutate obsolete geometry."),
+        })
 
     def _ensure_proxy(self) -> xmlrpc.client.ServerProxy:
         """Return a live XML-RPC proxy, recreating it if the connection was lost.
@@ -785,8 +829,20 @@ class FreeCADAdapter(CADAdapter):
         local_tools = self._get_local_tools()
         local_names = {tool["function"]["name"] for tool in local_tools}
         if tool_name in local_names:
-            # Will be handled by existing local routing below
-            pass
+            # Ghost-target protection (mutations only): refuse to silently
+            # mutate a consumed/hidden object. Read-only queries unaffected.
+            _mutating_local = {"box", "cylinder", "boolean", "delete_feature",
+                               "hole", "sketch", "extrude", "fillet", "chamfer",
+                               "mate", "shell", "pattern_linear",
+                               "pattern_circular", "edit_feature"}
+            if tool_name in _mutating_local:
+                _ghost_target = kwargs.get("target_id") or kwargs.get(
+                    "target_feature_id")
+                if _ghost_target:
+                    _err = self._check_mutation_target_live(
+                        tool_name, str(_ghost_target))
+                    if _err is not None:
+                        return _err
         else:
             # Step B: Ensure cache is populated, then check MCP tools
             if self._cached_tools is None:

@@ -8,7 +8,10 @@ import FreeCAD as App
 import FreeCADGui as Gui
 import Part
 
-from ._common import _active_doc, _finish
+from ._common import (
+    _active_doc, _finish, _op_fingerprint, _op_stamp, _op_existing_matches,
+    _transaction,
+)
 
 
 def _impl_pattern_linear(id: str, target_id: str, direction: dict, distance: float, count: int):
@@ -29,20 +32,24 @@ def _impl_pattern_linear(id: str, target_id: str, direction: dict, distance: flo
     if not target_obj:
         raise RuntimeError(f"Target object {target_id} not found")
 
-    # Idempotency guard (BIP 5.3): a lost-response retry re-invokes this op
-    # after the first attempt already created the pattern. The result object
-    # is keyed by the requested `id`, so if it already exists, converge on the
-    # existing pattern instead of creating a duplicate member set (id001, ...).
-    existing_pattern = doc.getObject(id)
-    if existing_pattern is not None:
-        try:
-            target_obj.ViewObject.Visibility = False
-        except Exception:
-            pass
-        _finish(existing_pattern)
-        return (f"Linear pattern '{id}' of '{target_id}' already existed; "
-                f"reusing it (count {c_count}, direction {direction}, "
-                f"distance {c_distance}).")
+    # Operation-identity idempotency (BIP 5.3-hardening): converge only when
+    # the existing object encodes the SAME logical operation (same target,
+    # direction, distance, count). An id collision with different parameters
+    # must NOT silently reuse/overwrite an unrelated object.
+    fingerprint = _op_fingerprint("pattern_linear", {
+        "target_id": target_id, "direction": direction,
+        "distance": c_distance, "count": c_count,
+    })
+    exists, matches, existing_pattern = _op_existing_matches(
+        doc, id, fingerprint)
+    if exists:
+        if matches:
+            _finish(existing_pattern)
+            return (f"Linear pattern '{id}' of '{target_id}' already existed "
+                    f"with identical parameters; reusing it (idempotent retry).")
+        raise RuntimeError(
+            f"Object '{id}' already exists but represents a DIFFERENT linear "
+            f"pattern. Refusing to silently overwrite it.")
 
     # Ensure direction components are floats
     dir_vec = App.Vector(
@@ -70,21 +77,22 @@ def _impl_pattern_linear(id: str, target_id: str, direction: dict, distance: flo
     else:
         final_shape = shapes[0]
 
-    pattern_obj = doc.addObject("Part::Feature", id)
-    pattern_obj.Shape = final_shape
+    with _transaction(doc, f"pattern_linear:{id}"):
+        pattern_obj = doc.addObject("Part::Feature", id)
+        pattern_obj.Shape = final_shape
+        _op_stamp(pattern_obj, fingerprint)
 
-    # Hide the original object
-    target_obj.ViewObject.Visibility = False
+        # Hide the original object
+        target_obj.ViewObject.Visibility = False
 
-    # Make the new feature visible as the current design tip
-    try:
-        if hasattr(pattern_obj, "ViewObject") and pattern_obj.ViewObject:
-            pattern_obj.ViewObject.Visibility = True
-    except Exception:
-        pass
+        # Make the new feature visible as the current design tip
+        try:
+            if hasattr(pattern_obj, "ViewObject") and pattern_obj.ViewObject:
+                pattern_obj.ViewObject.Visibility = True
+        except Exception:
+            pass
 
-    _finish(pattern_obj)
-    return f"Successfully created linear pattern '{id}' of '{target_id}' with count {c_count} in direction {direction} distance {c_distance}."
+        return _finish(pattern_obj)
 
 
 def _impl_pattern_circular(id: str, target_id: str, axis_origin: dict, axis_direction: dict, angle: float, count: int):
@@ -106,19 +114,21 @@ def _impl_pattern_circular(id: str, target_id: str, axis_origin: dict, axis_dire
     if not target_obj:
         raise RuntimeError(f"Target object {target_id} not found")
 
-    # Idempotency guard (BIP 5.4): a lost-response retry re-invokes this op
-    # after the first attempt already created the pattern. The result object
-    # is keyed by the requested `id`, so if it already exists, converge on the
-    # existing pattern instead of creating a duplicate member set (id001, ...).
-    existing_pattern = doc.getObject(id)
-    if existing_pattern is not None:
-        try:
-            target_obj.ViewObject.Visibility = False
-        except Exception:
-            pass
-        _finish(existing_pattern)
-        return (f"Circular pattern '{id}' of '{target_id}' already existed; "
-                f"reusing it (count {c_count}, angle {c_angle}°).")
+    # Operation-identity idempotency (BIP 5.4-hardening): see linear pattern.
+    fingerprint = _op_fingerprint("pattern_circular", {
+        "target_id": target_id, "axis_origin": axis_origin,
+        "axis_direction": axis_direction, "angle": c_angle, "count": c_count,
+    })
+    exists, matches, existing_pattern = _op_existing_matches(
+        doc, id, fingerprint)
+    if exists:
+        if matches:
+            _finish(existing_pattern)
+            return (f"Circular pattern '{id}' of '{target_id}' already existed "
+                    f"with identical parameters; reusing it (idempotent retry).")
+        raise RuntimeError(
+            f"Object '{id}' already exists but represents a DIFFERENT circular "
+            f"pattern. Refusing to silently overwrite it.")
 
     # Ensure axis_origin and axis_direction components are floats
     center = App.Vector(
@@ -156,18 +166,19 @@ def _impl_pattern_circular(id: str, target_id: str, axis_origin: dict, axis_dire
     else:
         final_shape = shapes[0]
 
-    pattern_obj = doc.addObject("Part::Feature", id)
-    pattern_obj.Shape = final_shape
+    with _transaction(doc, f"pattern_circular:{id}"):
+        pattern_obj = doc.addObject("Part::Feature", id)
+        pattern_obj.Shape = final_shape
+        _op_stamp(pattern_obj, fingerprint)
 
-    # Hide the original object
-    target_obj.ViewObject.Visibility = False
+        # Hide the original object
+        target_obj.ViewObject.Visibility = False
 
-    # Make the new feature visible as the current design tip
-    try:
-        if hasattr(pattern_obj, "ViewObject") and pattern_obj.ViewObject:
-            pattern_obj.ViewObject.Visibility = True
-    except Exception:
-        pass
+        # Make the new feature visible as the current design tip
+        try:
+            if hasattr(pattern_obj, "ViewObject") and pattern_obj.ViewObject:
+                pattern_obj.ViewObject.Visibility = True
+        except Exception:
+            pass
 
-    _finish(pattern_obj)
-    return f"Successfully created circular pattern '{id}' of '{target_id}' with count {c_count} around axis {axis_origin}->{axis_direction} angle {c_angle}°."
+        return _finish(pattern_obj)

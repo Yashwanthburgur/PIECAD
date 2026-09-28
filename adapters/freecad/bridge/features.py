@@ -7,10 +7,17 @@ import FreeCAD as App
 import FreeCADGui as Gui
 import Part
 
-from ._common import _active_doc, _sync
+from ._common import (
+    _active_doc, _sync, _op_fingerprint, _op_stamp, _op_existing_matches,
+    _transaction,
+)
 
 
 def _impl_edit_feature(id: str, target_id: str, parameters: dict):
+    return _edit_feature_impl(id, target_id, parameters)
+
+
+def _edit_feature_impl(id: str, target_id: str, parameters: dict):
     """Modify the parametric properties of an existing CAD feature.
 
     Supports regular FreeCAD properties (e.g., Length, Radius, Height) as
@@ -93,15 +100,40 @@ def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float,
     if not hasattr(target, "Shape") or target.Shape is None:
         raise ValueError(f"Target object has no Shape: {target_id}")
 
-    # BIP 4.3.4: Validate topology version if provided
+    # BIP 4.3.4 / 9.2-hardening: Validate topology version if provided.
+    # Must match the fingerprint produced by topology._impl_get_edges exactly:
+    # full ordered per-edge signatures (center, length, tangent), NOT an
+    # aggregate count+sum (which can collide across distinct geometries).
     if topology_version is not None:
         import hashlib
-        # Compute current topology version from edge count + lengths
+        import json as _json
         edges_data = []
         for i, edge in enumerate(target.Shape.Edges):
-            edges_data.append({"length": round(float(edge.Length), 3)})
-        version_data = f"{len(edges_data)}:{sum(e['length'] for e in edges_data)}".encode(
-        )
+            tangent = {"x": 0.0, "y": 0.0, "z": 0.0}
+            try:
+                if hasattr(edge, "tangentAt"):
+                    param = edge.FirstParameter + \
+                        (edge.LastParameter - edge.FirstParameter) * 0.5
+                    tangent_vec = edge.tangentAt(param)
+                    tangent = {
+                        "x": round(float(tangent_vec.x), 3),
+                        "y": round(float(tangent_vec.y), 3),
+                        "z": round(float(tangent_vec.z), 3)
+                    }
+            except Exception:
+                pass
+            edges_data.append({
+                "edge_id": f"{target_id}_edge_{i+1}",
+                "edge_index": i + 1,
+                "center": {
+                    "x": round(float(edge.CenterOfMass.x), 3),
+                    "y": round(float(edge.CenterOfMass.y), 3),
+                    "z": round(float(edge.CenterOfMass.z), 3)
+                },
+                "length": round(float(edge.Length), 3),
+                "tangent": tangent
+            })
+        version_data = _json.dumps(edges_data, sort_keys=True).encode()
         current_version = hashlib.md5(version_data).hexdigest()[:16]
         if current_version != topology_version:
             raise RuntimeError(
@@ -135,27 +167,62 @@ def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float,
         # Part::Fillet.Edges expects tuples of (1-based_index, radius1, radius2)
         freecad_edges.append((extracted_index, float(radius), float(radius)))
 
-    # Create fillet feature
-    new_obj = doc.addObject("Part::Fillet", id)
-    new_obj.Base = target
-    new_obj.Edges = freecad_edges
-    # Note: Part::Fillet does not have a .Radius property in FreeCAD 1.0
-    # Radii are specified per-edge in the Edges list
+    # Operation-identity idempotency: an identical logical retry converges to
+    # the already-created feature; an id collision with a DIFFERENT operation
+    # is an error (never silently overwrite unrelated geometry).
+    fingerprint = _op_fingerprint("fillet", {
+        "target_id": target_id, "edge_refs": list(edge_refs),
+        "radius": float(radius),
+    })
+    exists, matches, existing = _op_existing_matches(doc, id, fingerprint)
+    if exists:
+        if matches:
+            _sync(doc)
+            return (f"Fillet '{id}' already existed with identical parameters; "
+                    f"reusing it (idempotent retry).")
+        raise RuntimeError(
+            f"Object '{id}' already exists but represents a DIFFERENT fillet "
+            f"operation. Refusing to silently overwrite it.")
 
-    # Hide the original object since it's consumed
+    # Transactional mutation: either the whole feature (create + hide + recompute)
+    # commits, or nothing does.
+    tx_open = False
     try:
-        target.ViewObject.Visibility = False
+        doc.openTransaction(f"fillet:{id}")
+        tx_open = True
     except Exception:
-        pass
+        tx_open = False
 
-    # Make the new feature visible as the current design tip
     try:
-        if hasattr(new_obj, "ViewObject") and new_obj.ViewObject:
-            new_obj.ViewObject.Visibility = True
-    except Exception:
-        pass
+        # Create fillet feature
+        new_obj = doc.addObject("Part::Fillet", id)
+        new_obj.Base = target
+        new_obj.Edges = freecad_edges
+        _op_stamp(new_obj, fingerprint)
 
-    _sync(doc)
+        # Hide the original object since it's consumed
+        try:
+            target.ViewObject.Visibility = False
+        except Exception:
+            pass
+
+        # Make the new feature visible as the current design tip
+        try:
+            if hasattr(new_obj, "ViewObject") and new_obj.ViewObject:
+                new_obj.ViewObject.Visibility = True
+        except Exception:
+            pass
+
+        _sync(doc)
+        if tx_open:
+            doc.commitTransaction()
+    except Exception:
+        if tx_open:
+            try:
+                doc.abortTransaction()
+            except Exception:
+                pass
+        raise
     return f"Successfully created fillet '{id}' on {len(edge_refs)} edge(s) of '{target_id}' with radius {radius}."
 
 
@@ -184,15 +251,37 @@ def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float,
     if not hasattr(target, "Shape") or target.Shape is None:
         raise ValueError(f"Target object has no Shape: {target_id}")
 
-    # BIP 4.3.4: Validate topology version if provided
+    # BIP 4.3.4 / 9.2-hardening: same stronger fingerprint as _impl_fillet.
     if topology_version is not None:
         import hashlib
-        # Compute current topology version from edge count + lengths
+        import json as _json
         edges_data = []
         for i, edge in enumerate(target.Shape.Edges):
-            edges_data.append({"length": round(float(edge.Length), 3)})
-        version_data = f"{len(edges_data)}:{sum(e['length'] for e in edges_data)}".encode(
-        )
+            tangent = {"x": 0.0, "y": 0.0, "z": 0.0}
+            try:
+                if hasattr(edge, "tangentAt"):
+                    param = edge.FirstParameter + \
+                        (edge.LastParameter - edge.FirstParameter) * 0.5
+                    tangent_vec = edge.tangentAt(param)
+                    tangent = {
+                        "x": round(float(tangent_vec.x), 3),
+                        "y": round(float(tangent_vec.y), 3),
+                        "z": round(float(tangent_vec.z), 3)
+                    }
+            except Exception:
+                pass
+            edges_data.append({
+                "edge_id": f"{target_id}_edge_{i+1}",
+                "edge_index": i + 1,
+                "center": {
+                    "x": round(float(edge.CenterOfMass.x), 3),
+                    "y": round(float(edge.CenterOfMass.y), 3),
+                    "z": round(float(edge.CenterOfMass.z), 3)
+                },
+                "length": round(float(edge.Length), 3),
+                "tangent": tangent
+            })
+        version_data = _json.dumps(edges_data, sort_keys=True).encode()
         current_version = hashlib.md5(version_data).hexdigest()[:16]
         if current_version != topology_version:
             raise RuntimeError(
@@ -226,27 +315,58 @@ def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float,
         # Part::Chamfer.Edges expects tuples of (1-based_index, distance1, distance2)
         freecad_edges.append((extracted_index, float(size), float(size)))
 
-    # Create chamfer feature
-    new_obj = doc.addObject("Part::Chamfer", id)
-    new_obj.Base = target
-    new_obj.Edges = freecad_edges
-    # Note: Part::Chamfer does not have a .Size property in FreeCAD 1.0
-    # Distances are specified per-edge in the Edges list
+    # Operation-identity idempotency (same semantics as _impl_fillet).
+    fingerprint = _op_fingerprint("chamfer", {
+        "target_id": target_id, "edge_refs": list(edge_refs),
+        "size": float(size),
+    })
+    exists, matches, existing = _op_existing_matches(doc, id, fingerprint)
+    if exists:
+        if matches:
+            _sync(doc)
+            return (f"Chamfer '{id}' already existed with identical parameters; "
+                    f"reusing it (idempotent retry).")
+        raise RuntimeError(
+            f"Object '{id}' already exists but represents a DIFFERENT chamfer "
+            f"operation. Refusing to silently overwrite it.")
 
-    # Hide the original object since it's consumed
+    tx_open = False
     try:
-        target.ViewObject.Visibility = False
+        doc.openTransaction(f"chamfer:{id}")
+        tx_open = True
     except Exception:
-        pass
+        tx_open = False
 
-    # Make the new feature visible as the current design tip
     try:
-        if hasattr(new_obj, "ViewObject") and new_obj.ViewObject:
-            new_obj.ViewObject.Visibility = True
-    except Exception:
-        pass
+        # Create chamfer feature
+        new_obj = doc.addObject("Part::Chamfer", id)
+        new_obj.Base = target
+        new_obj.Edges = freecad_edges
+        _op_stamp(new_obj, fingerprint)
 
-    _sync(doc)
+        # Hide the original object since it's consumed
+        try:
+            target.ViewObject.Visibility = False
+        except Exception:
+            pass
+
+        # Make the new feature visible as the current design tip
+        try:
+            if hasattr(new_obj, "ViewObject") and new_obj.ViewObject:
+                new_obj.ViewObject.Visibility = True
+        except Exception:
+            pass
+
+        _sync(doc)
+        if tx_open:
+            doc.commitTransaction()
+    except Exception:
+        if tx_open:
+            try:
+                doc.abortTransaction()
+            except Exception:
+                pass
+        raise
     return f"Successfully created chamfer '{id}' on {len(edge_refs)} edge(s) of '{target_id}' with size {size}."
 
 
@@ -297,17 +417,34 @@ def _impl_shell(id, target_id, face_refs, thickness):
             raise RuntimeError(
                 f"B-Rep makeThickness failed ({thick_val}mm): {err1} | Fallback failed: {err2}")
 
-    shell_obj = doc.addObject("Part::Feature", id)
-    shell_obj.Shape = thick_shape
+    # Operation-identity idempotency (identical retry converges; different op
+    # under same id is rejected).
+    fingerprint = _op_fingerprint("shell", {
+        "target_id": target_id, "face_refs": [str(f) for f in face_refs],
+        "thickness": float(thick_val),
+    })
+    exists, matches, existing = _op_existing_matches(doc, id, fingerprint)
+    if exists:
+        if matches:
+            _sync(doc)
+            return (f"Shell '{id}' already existed with identical parameters; "
+                    f"reusing it (idempotent retry).")
+        raise RuntimeError(
+            f"Object '{id}' already exists but represents a DIFFERENT shell "
+            f"operation. Refusing to silently overwrite it.")
 
-    target_obj.ViewObject.Visibility = False
+    with _transaction(doc, f"shell:{id}"):
+        shell_obj = doc.addObject("Part::Feature", id)
+        shell_obj.Shape = thick_shape
+        _op_stamp(shell_obj, fingerprint)
 
-    # Make the new feature visible as the current design tip
-    try:
-        if hasattr(shell_obj, "ViewObject") and shell_obj.ViewObject:
-            shell_obj.ViewObject.Visibility = True
-    except Exception:
-        pass
+        target_obj.ViewObject.Visibility = False
 
-    doc.recompute()
-    return _sync(doc)
+        # Make the new feature visible as the current design tip
+        try:
+            if hasattr(shell_obj, "ViewObject") and shell_obj.ViewObject:
+                shell_obj.ViewObject.Visibility = True
+        except Exception:
+            pass
+
+        return _sync(doc)
