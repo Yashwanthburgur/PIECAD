@@ -499,13 +499,37 @@ class ParameterVerifier:
             else:
                 unknowns.append("depth (drill tool properties unavailable)")
 
-        # Thread parameters - UNKNOWN if not represented in CAD
+        # Thread parameters - verify ThreadSpec property on cut object if available
         req_kind = requested.get("kind", "simple")
         req_thread = requested.get("thread_spec")
         if req_kind == "tapped" and req_thread:
-            # ThreadSpec property may or may not be present on cut object
-            unknowns.append(
-                f"thread_spec {req_thread} (CAD representation not verified)")
+            # Try to get ThreadSpec from the cut object's properties (from hole_mass_json)
+            try:
+                hole_data = json.loads(hole_mass_json)
+                hole_props = hole_data.get("properties", {})
+                act_thread_spec = hole_props.get("ThreadSpec")
+                if act_thread_spec is not None:
+                    # Normalize both for comparison (same logic as bridge)
+                    import re
+
+                    def normalize(s):
+                        s = str(s).strip().upper()
+                        s = s.replace(" ", "").replace("X", "x")
+                        if "UNC" in s:
+                            s = s.replace("UNC", " UNC")
+                        s = " ".join(s.split())
+                        return s
+                    req_norm = normalize(req_thread)
+                    act_norm = normalize(act_thread_spec)
+                    if req_norm != act_norm:
+                        failures.append(
+                            f"thread_spec: requested {req_thread}, got {act_thread_spec}")
+                else:
+                    unknowns.append(
+                        "thread_spec (ThreadSpec property not on cut object)")
+            except (json.JSONDecodeError, TypeError):
+                unknowns.append(
+                    "thread_spec (could not parse hole mass properties)")
 
         if failures:
             return VerificationResult.FAIL, "; ".join(failures)
