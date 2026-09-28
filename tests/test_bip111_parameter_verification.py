@@ -312,7 +312,7 @@ def test_pattern_parameter_verification_pass():
     pattern_props = {"PatternCount": 6, "PatternType": "linear"}
 
     result, reason = ParameterVerifier.verify_pattern_count(
-        requested, pattern_props)
+        requested, pattern_props, expected_type="linear")
     assert result == VerificationResult.PASS, f"Expected PASS, got {result}: {reason}"
     print("  [PASS] Pattern with matching count")
 
@@ -326,10 +326,24 @@ def test_pattern_parameter_verification_fail():
                      "PatternType": "linear"}  # Mismatched count
 
     result, reason = ParameterVerifier.verify_pattern_count(
-        requested, pattern_props)
+        requested, pattern_props, expected_type="linear")
     assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
     assert "count" in reason
     print("  [PASS] Pattern with mismatched count fails")
+
+
+def test_pattern_parameter_verification_type_mismatch():
+    """Pattern with mismatched PatternType should be UNKNOWN."""
+    print("Testing pattern parameter verification - type mismatch...")
+
+    requested = {"count": 6}
+    pattern_props = {"PatternCount": 6,
+                     "PatternType": "circular"}  # Type mismatch
+
+    result, reason = ParameterVerifier.verify_pattern_count(
+        requested, pattern_props, expected_type="linear")
+    assert result == VerificationResult.UNKNOWN, f"Expected UNKNOWN, got {result}: {reason}"
+    print("  [PASS] Pattern with type mismatch is UNKNOWN")
 
 
 def test_pattern_parameter_verification_unknown():
@@ -340,9 +354,79 @@ def test_pattern_parameter_verification_unknown():
     pattern_props = {"some": "props"}  # No PatternCount property
 
     result, reason = ParameterVerifier.verify_pattern_count(
-        requested, pattern_props)
+        requested, pattern_props, expected_type="linear")
     assert result == VerificationResult.UNKNOWN, f"Expected UNKNOWN, got {result}: {reason}"
     print("  [PASS] Pattern without PatternCount property is UNKNOWN")
+
+
+def test_pattern_parameter_verification_malformed_count():
+    """Pattern with non-numeric count should be FAIL."""
+    print("Testing pattern parameter verification - malformed count...")
+
+    requested = {"count": 6}
+    pattern_props = {"PatternCount": "six",
+                     "PatternType": "linear"}  # Non-numeric count
+
+    result, reason = ParameterVerifier.verify_pattern_count(
+        requested, pattern_props, expected_type="linear")
+    assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
+    print("  [PASS] Pattern with non-numeric count fails")
+
+
+def test_pattern_parameter_verification_missing_type():
+    """Pattern with missing PatternType should be UNKNOWN (missing evidence)."""
+    print("Testing pattern parameter verification - missing type...")
+
+    requested = {"count": 6}
+    pattern_props = {"PatternCount": 6}  # No PatternType
+
+    result, reason = ParameterVerifier.verify_pattern_count(
+        requested, pattern_props, expected_type="linear")
+    assert result == VerificationResult.UNKNOWN, f"Expected UNKNOWN, got {result}: {reason}"
+    print("  [PASS] Pattern with missing type is UNKNOWN")
+
+
+def test_fillet_parameter_verification_malformed():
+    """Fillet with non-numeric radius should be FAIL."""
+    print("Testing fillet parameter verification - malformed radius...")
+
+    requested = {"radius": 5.0}
+    fillet_props = {"FilletRadius": "five"}  # Non-numeric radius
+
+    result, reason = ParameterVerifier.verify_fillet_parameters(
+        requested, fillet_props)
+    assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
+    print("  [PASS] Fillet with non-numeric radius fails")
+
+
+def test_chamfer_parameter_verification_malformed():
+    """Chamfer with non-numeric size should be FAIL."""
+    print("Testing chamfer parameter verification - malformed size...")
+
+    requested = {"size": 3.0}
+    chamfer_props = {"ChamferSize": "three"}  # Non-numeric size
+
+    result, reason = ParameterVerifier.verify_chamfer_parameters(
+        requested, chamfer_props)
+    assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
+    print("  [PASS] Chamfer with non-numeric size fails")
+
+
+def test_hole_parameter_verification_malformed_thread():
+    """Hole with mismatched thread spec should FAIL."""
+    print("Testing hole parameter verification - malformed thread spec...")
+
+    requested = {"diameter": 20.0, "depth": 30.0,
+                 "kind": "tapped", "thread_spec": "M6x1.0"}
+    hole_mass = json.dumps({"status": "success", "volume": 500.0, "properties": {
+                           "ThreadSpec": "M8x1.25"}})  # Mismatched thread
+    drill_props = {"Radius": 10.0, "Height": 32.0}
+
+    result, reason = ParameterVerifier.verify_hole_parameters(
+        requested, hole_mass, drill_props)
+    assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
+    assert "thread_spec" in reason
+    print("  [PASS] Hole with mismatched thread spec fails")
 
 
 def test_boolean_subtract_verification_pass():

@@ -561,10 +561,14 @@ class ParameterVerifier:
         if fillet_props and "FilletRadius" in fillet_props:
             act_radius = fillet_props["FilletRadius"]
             if act_radius is not None:
-                if _float_equal(float(req_radius), act_radius):
-                    return VerificationResult.PASS, f"fillet radius verified: {req_radius}"
-                else:
-                    return VerificationResult.FAIL, f"fillet radius mismatch: requested {req_radius}, got {act_radius}"
+                try:
+                    act_radius_f = float(act_radius)
+                    if _float_equal(float(req_radius), act_radius_f):
+                        return VerificationResult.PASS, f"fillet radius verified: {req_radius}"
+                    else:
+                        return VerificationResult.FAIL, f"fillet radius mismatch: requested {req_radius}, got {act_radius}"
+                except (TypeError, ValueError):
+                    return VerificationResult.FAIL, f"fillet radius malformed: got {act_radius}"
 
         # Fallback: UNKNOWN if custom property not available
         return VerificationResult.UNKNOWN, "fillet radius not available in properties (custom FilletRadius property not found)"
@@ -593,10 +597,14 @@ class ParameterVerifier:
         if chamfer_props and "ChamferSize" in chamfer_props:
             act_size = chamfer_props["ChamferSize"]
             if act_size is not None:
-                if _float_equal(float(req_size), act_size):
-                    return VerificationResult.PASS, f"chamfer size verified: {req_size}"
-                else:
-                    return VerificationResult.FAIL, f"chamfer size mismatch: requested {req_size}, got {act_size}"
+                try:
+                    act_size_f = float(act_size)
+                    if _float_equal(float(req_size), act_size_f):
+                        return VerificationResult.PASS, f"chamfer size verified: {req_size}"
+                    else:
+                        return VerificationResult.FAIL, f"chamfer size mismatch: requested {req_size}, got {act_size}"
+                except (TypeError, ValueError):
+                    return VerificationResult.FAIL, f"chamfer size malformed: got {act_size}"
 
         # Fallback: UNKNOWN if custom property not available
         return VerificationResult.UNKNOWN, "chamfer size not available in properties (custom ChamferSize property not found)"
@@ -625,6 +633,32 @@ class ParameterVerifier:
         if req_count is None:
             return VerificationResult.UNKNOWN, "no count requested"
 
+    @staticmethod
+    def verify_pattern_count(
+        requested: Dict[str, Any],
+        pattern_props: Optional[Dict[str, Any]] = None,
+        target_faces_json: Optional[str] = None,
+        expected_type: Optional[str] = None
+    ) -> Tuple[VerificationResult, str]:
+        """
+        Verify pattern occurrence count.
+
+        FreeCAD pattern features now store count as custom property PatternCount
+        for parameter verification (BIP 11.4).
+
+        Args:
+            requested: Dict with "count"
+            pattern_props: Live properties of the pattern feature (if available)
+            target_faces_json: get_faces result for the pattern result (optional)
+            expected_type: Expected pattern type ("linear" or "circular") from tool
+
+        Returns:
+            (VerificationResult, reason)
+        """
+        req_count = requested.get("count")
+        if req_count is None:
+            return VerificationResult.UNKNOWN, "no count requested"
+
         # Check for custom PatternCount property (BIP 11.4)
         if pattern_props and "PatternCount" in pattern_props:
             act_count = pattern_props["PatternCount"]
@@ -632,6 +666,13 @@ class ParameterVerifier:
                 try:
                     act_count = int(act_count)
                     if _int_equal(int(req_count), act_count):
+                        # BIP 11.5: Pattern type safety - verify PatternType matches expected
+                        # PatternType must be present and match expected tool
+                        act_type = pattern_props.get("PatternType")
+                        if not act_type:
+                            return VerificationResult.UNKNOWN, "pattern type missing: PatternType property not found"
+                        if act_type != expected_type:
+                            return VerificationResult.UNKNOWN, f"pattern type mismatch: expected {expected_type}, got {act_type}"
                         return VerificationResult.PASS, f"pattern count verified: {req_count}"
                     else:
                         return VerificationResult.FAIL, f"pattern count mismatch: requested {req_count}, got {act_count}"
@@ -796,7 +837,9 @@ class ParameterVerifier:
                         "get_faces", object_name=target_id)
                 except Exception:
                     pass
-            return ParameterVerifier.verify_pattern_count(args, pattern_props, target_faces_json)
+            # Determine expected pattern type based on tool
+            expected_type = "linear" if tool == "pattern_linear" else "circular"
+            return ParameterVerifier.verify_pattern_count(args, pattern_props, target_faces_json, expected_type)
 
         elif tool == "boolean":
             if not result_id or not target_id:
