@@ -163,6 +163,52 @@ def test_hole_parameter_verification_fail_depth():
     print("  [PASS] Hole with mismatched depth fails")
 
 
+def test_hole_parameter_verification_pass():
+    """Hole with matching drill properties should PASS."""
+    print("Testing hole parameter verification - PASS...")
+
+    requested = {"diameter": 20.0, "depth": 30.0, "kind": "simple"}
+    hole_mass = json.dumps({"status": "success", "volume": 500.0})
+    drill_props = {"Radius": 10.0, "Height": 32.0}  # depth + 2mm over-drill
+
+    result, reason = ParameterVerifier.verify_hole_parameters(
+        requested, hole_mass, drill_props)
+    assert result == VerificationResult.PASS, f"Expected PASS, got {result}: {reason}"
+    print("  [PASS] Hole with matching drill properties")
+
+
+def test_hole_parameter_verification_fail_diameter():
+    """Hole with mismatched diameter should FAIL."""
+    print("Testing hole parameter verification - FAIL diameter...")
+
+    requested = {"diameter": 20.0, "depth": 30.0, "kind": "simple"}
+    hole_mass = json.dumps({"status": "success", "volume": 500.0})
+    # radius 8 -> diameter 16, not 20
+    drill_props = {"Radius": 8.0, "Height": 32.0}
+
+    result, reason = ParameterVerifier.verify_hole_parameters(
+        requested, hole_mass, drill_props)
+    assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
+    assert "diameter" in reason
+    print("  [PASS] Hole with mismatched diameter fails")
+
+
+def test_hole_parameter_verification_fail_depth():
+    """Hole with mismatched depth should FAIL."""
+    print("Testing hole parameter verification - FAIL depth...")
+
+    requested = {"diameter": 20.0, "depth": 30.0, "kind": "simple"}
+    hole_mass = json.dumps({"status": "success", "volume": 500.0})
+    # height 40 -> depth 38 (with +2mm over-drill), not 30
+    drill_props = {"Radius": 10.0, "Height": 40.0}
+
+    result, reason = ParameterVerifier.verify_hole_parameters(
+        requested, hole_mass, drill_props)
+    assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
+    assert "depth" in reason
+    print("  [PASS] Hole with mismatched depth fails")
+
+
 def test_hole_parameter_verification_unknown():
     """Hole with missing drill properties should be UNKNOWN."""
     print("Testing hole parameter verification - UNKNOWN...")
@@ -177,43 +223,126 @@ def test_hole_parameter_verification_unknown():
     print("  [PASS] Hole with missing drill properties is UNKNOWN")
 
 
+def test_fillet_parameter_verification_pass():
+    """Fillet with matching radius should PASS (BIP 11.4)."""
+    print("Testing fillet parameter verification - PASS...")
+
+    requested = {"radius": 5.0}
+    fillet_props = {"FilletRadius": 5.0}  # Custom property from BIP 11.4
+
+    result, reason = ParameterVerifier.verify_fillet_parameters(
+        requested, fillet_props)
+    assert result == VerificationResult.PASS, f"Expected PASS, got {result}: {reason}"
+    print("  [PASS] Fillet with matching radius")
+
+
+def test_fillet_parameter_verification_fail():
+    """Fillet with mismatched radius should FAIL (BIP 11.4)."""
+    print("Testing fillet parameter verification - FAIL...")
+
+    requested = {"radius": 5.0}
+    fillet_props = {"FilletRadius": 2.0}  # Mismatched radius
+
+    result, reason = ParameterVerifier.verify_fillet_parameters(
+        requested, fillet_props)
+    assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
+    assert "radius" in reason
+    print("  [PASS] Fillet with mismatched radius fails")
+
+
 def test_fillet_parameter_verification_unknown():
-    """Fillet radius verification should be UNKNOWN (no per-edge access)."""
+    """Fillet without custom FilletRadius property should be UNKNOWN."""
     print("Testing fillet parameter verification - UNKNOWN...")
 
     requested = {"radius": 5.0}
-    fillet_props = {"some": "props"}
+    fillet_props = {"some": "props"}  # No FilletRadius property
 
     result, reason = ParameterVerifier.verify_fillet_parameters(
         requested, fillet_props)
     assert result == VerificationResult.UNKNOWN, f"Expected UNKNOWN, got {result}: {reason}"
-    print("  [PASS] Fillet verification is UNKNOWN (no per-edge access)")
+    print("  [PASS] Fillet without FilletRadius property is UNKNOWN")
+
+
+def test_chamfer_parameter_verification_pass():
+    """Chamfer with matching size should PASS (BIP 11.4)."""
+    print("Testing chamfer parameter verification - PASS...")
+
+    requested = {"size": 3.0}
+    chamfer_props = {"ChamferSize": 3.0}  # Custom property from BIP 11.4
+
+    result, reason = ParameterVerifier.verify_chamfer_parameters(
+        requested, chamfer_props)
+    assert result == VerificationResult.PASS, f"Expected PASS, got {result}: {reason}"
+    print("  [PASS] Chamfer with matching size")
+
+
+def test_chamfer_parameter_verification_fail():
+    """Chamfer with mismatched size should FAIL (BIP 11.4)."""
+    print("Testing chamfer parameter verification - FAIL...")
+
+    requested = {"size": 3.0}
+    chamfer_props = {"ChamferSize": 2.0}  # Mismatched size
+
+    result, reason = ParameterVerifier.verify_chamfer_parameters(
+        requested, chamfer_props)
+    assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
+    assert "size" in reason
+    print("  [PASS] Chamfer with mismatched size fails")
 
 
 def test_chamfer_parameter_verification_unknown():
-    """Chamfer size verification should be UNKNOWN (no per-edge access)."""
+    """Chamfer without custom ChamferSize property should be UNKNOWN."""
     print("Testing chamfer parameter verification - UNKNOWN...")
 
     requested = {"size": 3.0}
-    chamfer_props = {"some": "props"}
+    chamfer_props = {"some": "props"}  # No ChamferSize property
 
     result, reason = ParameterVerifier.verify_chamfer_parameters(
         requested, chamfer_props)
     assert result == VerificationResult.UNKNOWN, f"Expected UNKNOWN, got {result}: {reason}"
-    print("  [PASS] Chamfer verification is UNKNOWN (no per-edge access)")
+    print("  [PASS] Chamfer without ChamferSize property is UNKNOWN")
+
+
+def test_pattern_parameter_verification_pass():
+    """Pattern with matching count should PASS (BIP 11.4)."""
+    print("Testing pattern parameter verification - PASS...")
+
+    requested = {"count": 6}
+    # Custom property from BIP 11.4
+    pattern_props = {"PatternCount": 6, "PatternType": "linear"}
+
+    result, reason = ParameterVerifier.verify_pattern_count(
+        requested, pattern_props)
+    assert result == VerificationResult.PASS, f"Expected PASS, got {result}: {reason}"
+    print("  [PASS] Pattern with matching count")
+
+
+def test_pattern_parameter_verification_fail():
+    """Pattern with mismatched count should FAIL (BIP 11.4)."""
+    print("Testing pattern parameter verification - FAIL...")
+
+    requested = {"count": 6}
+    pattern_props = {"PatternCount": 4,
+                     "PatternType": "linear"}  # Mismatched count
+
+    result, reason = ParameterVerifier.verify_pattern_count(
+        requested, pattern_props)
+    assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
+    assert "count" in reason
+    print("  [PASS] Pattern with mismatched count fails")
 
 
 def test_pattern_parameter_verification_unknown():
-    """Pattern count verification should be UNKNOWN (no count property)."""
+    """Pattern without custom PatternCount property should be UNKNOWN."""
     print("Testing pattern parameter verification - UNKNOWN...")
 
     requested = {"count": 6}
-    pattern_props = {"some": "props"}
+    pattern_props = {"some": "props"}  # No PatternCount property
 
     result, reason = ParameterVerifier.verify_pattern_count(
         requested, pattern_props)
     assert result == VerificationResult.UNKNOWN, f"Expected UNKNOWN, got {result}: {reason}"
-    print("  [PASS] Pattern count verification is UNKNOWN (no count property)")
+    print("  [PASS] Pattern without PatternCount property is UNKNOWN")
 
 
 def test_boolean_subtract_verification_pass():

@@ -4,6 +4,7 @@ Contains implementations for patterning features (linear and circular),
 ported from the former bridge monolith.
 """
 
+import json
 import FreeCAD as App
 import FreeCADGui as Gui
 import Part
@@ -81,6 +82,30 @@ def _impl_pattern_linear(id: str, target_id: str, direction: dict, distance: flo
         pattern_obj = doc.addObject("Part::Feature", id)
         pattern_obj.Shape = final_shape
         _op_stamp(pattern_obj, fingerprint)
+
+        # Store pattern count as custom property for parameter verification (BIP 11.4)
+        if not hasattr(pattern_obj, "PatternCount"):
+            pattern_obj.addProperty(
+                "App::PropertyInteger", "PatternCount", "PieCAD")
+        pattern_obj.PatternCount = c_count
+
+        # Store pattern type for verification
+        if not hasattr(pattern_obj, "PatternType"):
+            pattern_obj.addProperty(
+                "App::PropertyString", "PatternType", "PieCAD")
+        pattern_obj.PatternType = "linear"
+
+        # Store source parameters for verification
+        if not hasattr(pattern_obj, "PatternDirection"):
+            pattern_obj.addProperty(
+                "App::PropertyString", "PatternDirection", "PieCAD")
+        import json as _json
+        pattern_obj.PatternDirection = json.dumps(direction)
+
+        if not hasattr(pattern_obj, "PatternDistance"):
+            pattern_obj.addProperty(
+                "App::PropertyFloat", "PatternDistance", "PieCAD")
+        pattern_obj.PatternDistance = c_distance
 
         # Hide the original object
         target_obj.ViewObject.Visibility = False
@@ -170,6 +195,34 @@ def _impl_pattern_circular(id: str, target_id: str, axis_origin: dict, axis_dire
         pattern_obj = doc.addObject("Part::Feature", id)
         pattern_obj.Shape = final_shape
         _op_stamp(pattern_obj, fingerprint)
+
+        # Store pattern count as custom property for parameter verification (BIP 11.4)
+        if not hasattr(pattern_obj, "PatternCount"):
+            pattern_obj.addProperty(
+                "App::PropertyInteger", "PatternCount", "PieCAD")
+        pattern_obj.PatternCount = c_count
+
+        # Store pattern type for verification
+        if not hasattr(pattern_obj, "PatternType"):
+            pattern_obj.addProperty(
+                "App::PropertyString", "PatternType", "PieCAD")
+        pattern_obj.PatternType = "circular"
+
+        # Store source parameters for verification
+        if not hasattr(pattern_obj, "PatternAxisOrigin"):
+            pattern_obj.addProperty(
+                "App::PropertyString", "PatternAxisOrigin", "PieCAD")
+        pattern_obj.PatternAxisOrigin = json.dumps(axis_origin)
+
+        if not hasattr(pattern_obj, "PatternAxisDirection"):
+            pattern_obj.addProperty(
+                "App::PropertyString", "PatternAxisDirection", "PieCAD")
+        pattern_obj.PatternAxisDirection = json.dumps(axis_direction)
+
+        if not hasattr(pattern_obj, "PatternAngle"):
+            pattern_obj.addProperty(
+                "App::PropertyFloat", "PatternAngle", "PieCAD")
+        pattern_obj.PatternAngle = c_angle
 
         # Hide the original object
         target_obj.ViewObject.Visibility = False

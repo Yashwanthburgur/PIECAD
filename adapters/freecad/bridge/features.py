@@ -200,6 +200,17 @@ def _impl_fillet(id: str, target_id: str, edge_refs: list, radius: float,
         new_obj.Edges = freecad_edges
         _op_stamp(new_obj, fingerprint)
 
+        # Store fillet radius as custom property for parameter verification (BIP 11.4)
+        if not hasattr(new_obj, "FilletRadius"):
+            new_obj.addProperty("App::PropertyFloat", "FilletRadius", "PieCAD")
+        new_obj.FilletRadius = float(radius)
+
+        # Store target edge refs for verification mapping
+        if not hasattr(new_obj, "FilletEdgeRefs"):
+            new_obj.addProperty("App::PropertyStringList",
+                                "FilletEdgeRefs", "PieCAD")
+        new_obj.FilletEdgeRefs = list(edge_refs)
+
         # Hide the original object since it's consumed
         try:
             target.ViewObject.Visibility = False
@@ -343,6 +354,17 @@ def _impl_chamfer(id: str, target_id: str, edge_refs: list, size: float,
         new_obj.Base = target
         new_obj.Edges = freecad_edges
         _op_stamp(new_obj, fingerprint)
+
+        # Store chamfer size as custom property for parameter verification (BIP 11.4)
+        if not hasattr(new_obj, "ChamferSize"):
+            new_obj.addProperty("App::PropertyFloat", "ChamferSize", "PieCAD")
+        new_obj.ChamferSize = float(size)
+
+        # Store target edge refs for verification mapping
+        if not hasattr(new_obj, "ChamferEdgeRefs"):
+            new_obj.addProperty("App::PropertyStringList",
+                                "ChamferEdgeRefs", "PieCAD")
+        new_obj.ChamferEdgeRefs = list(edge_refs)
 
         # Hide the original object since it's consumed
         try:

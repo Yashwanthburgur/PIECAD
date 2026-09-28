@@ -543,8 +543,8 @@ class ParameterVerifier:
         fillet_props: Optional[Dict[str, Any]] = None
     ) -> Tuple[VerificationResult, str]:
         """
-        Verify fillet radius. FreeCAD Part::Fillet stores radii per-edge in Edges list,
-        not as a single Radius property. Evidence may be limited.
+        Verify fillet radius. FreeCAD Part::Fillet now stores radius as custom property
+        FilletRadius for parameter verification (BIP 11.4).
 
         Args:
             requested: Dict with "radius"
@@ -556,10 +556,18 @@ class ParameterVerifier:
         req_radius = requested.get("radius")
         if req_radius is None:
             return VerificationResult.UNKNOWN, "no radius requested"
-        # Part::Fillet has no .Radius property; radii stored per-edge in Edges list.
-        # We cannot reliably extract individual edge radii from properties dict alone.
-        # Bridge could expose them but current state doesn't.
-        return VerificationResult.UNKNOWN, "fillet radius verification requires per-edge Edges list access (not in properties)"
+
+        # Check for custom FilletRadius property (BIP 11.4)
+        if fillet_props and "FilletRadius" in fillet_props:
+            act_radius = fillet_props["FilletRadius"]
+            if act_radius is not None:
+                if _float_equal(float(req_radius), act_radius):
+                    return VerificationResult.PASS, f"fillet radius verified: {req_radius}"
+                else:
+                    return VerificationResult.FAIL, f"fillet radius mismatch: requested {req_radius}, got {act_radius}"
+
+        # Fallback: UNKNOWN if custom property not available
+        return VerificationResult.UNKNOWN, "fillet radius not available in properties (custom FilletRadius property not found)"
 
     @staticmethod
     def verify_chamfer_parameters(
@@ -567,7 +575,8 @@ class ParameterVerifier:
         chamfer_props: Optional[Dict[str, Any]] = None
     ) -> Tuple[VerificationResult, str]:
         """
-        Verify chamfer size. Part::Chamfer stores distances per-edge in Edges list.
+        Verify chamfer size. FreeCAD Part::Chamfer now stores size as custom property
+        ChamferSize for parameter verification (BIP 11.4).
 
         Args:
             requested: Dict with "size"
@@ -579,8 +588,18 @@ class ParameterVerifier:
         req_size = requested.get("size")
         if req_size is None:
             return VerificationResult.UNKNOWN, "no size requested"
-        # Part::Chamfer has no .Size property; distances stored per-edge.
-        return VerificationResult.UNKNOWN, "chamfer size verification requires per-edge Edges list access (not in properties)"
+
+        # Check for custom ChamferSize property (BIP 11.4)
+        if chamfer_props and "ChamferSize" in chamfer_props:
+            act_size = chamfer_props["ChamferSize"]
+            if act_size is not None:
+                if _float_equal(float(req_size), act_size):
+                    return VerificationResult.PASS, f"chamfer size verified: {req_size}"
+                else:
+                    return VerificationResult.FAIL, f"chamfer size mismatch: requested {req_size}, got {act_size}"
+
+        # Fallback: UNKNOWN if custom property not available
+        return VerificationResult.UNKNOWN, "chamfer size not available in properties (custom ChamferSize property not found)"
 
     @staticmethod
     def verify_pattern_count(
@@ -591,14 +610,12 @@ class ParameterVerifier:
         """
         Verify pattern occurrence count.
 
-        For linear/circular patterns, the count is a construction parameter.
-        Best evidence: if pattern was created via multiFuse of N copies,
-        face count increase correlates but is not exact.
-        FreeCAD pattern features don't expose count as a queryable property.
+        FreeCAD pattern features now store count as custom property PatternCount
+        for parameter verification (BIP 11.4).
 
         Args:
             requested: Dict with "count"
-            pattern_props: Live properties (no count property exposed)
+            pattern_props: Live properties of the pattern feature (if available)
             target_faces_json: get_faces result for the pattern result (optional)
 
         Returns:
@@ -607,9 +624,22 @@ class ParameterVerifier:
         req_count = requested.get("count")
         if req_count is None:
             return VerificationResult.UNKNOWN, "no count requested"
-        # No reliable property exposes the pattern count in current FreeCAD representation.
-        # Face count increase is a proxy but not exact (depends on geometry).
-        return VerificationResult.UNKNOWN, "pattern count not exposed as queryable property in current CAD representation"
+
+        # Check for custom PatternCount property (BIP 11.4)
+        if pattern_props and "PatternCount" in pattern_props:
+            act_count = pattern_props["PatternCount"]
+            if act_count is not None:
+                try:
+                    act_count = int(act_count)
+                    if _int_equal(int(req_count), act_count):
+                        return VerificationResult.PASS, f"pattern count verified: {req_count}"
+                    else:
+                        return VerificationResult.FAIL, f"pattern count mismatch: requested {req_count}, got {act_count}"
+                except (TypeError, ValueError):
+                    return VerificationResult.FAIL, f"pattern count mismatch: requested {req_count}, got {act_count}"
+
+        # Fallback: UNKNOWN if custom property not available
+        return VerificationResult.UNKNOWN, "pattern count not available in properties (custom PatternCount property not found)"
 
     @staticmethod
     def verify_boolean_operation(
