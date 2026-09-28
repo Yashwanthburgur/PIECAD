@@ -435,7 +435,8 @@ def test_boolean_subtract_verification_pass():
 
     requested = {"mode": "subtract"}
     base_mass = json.dumps({"volume": 1000.0})
-    result_mass = json.dumps({"volume": 800.0})  # volume decreased
+    result_mass = json.dumps(
+        {"volume": 800.0, "properties": {"BooleanMode": "subtract"}})
 
     result, reason = ParameterVerifier.verify_boolean_operation(
         requested, base_mass, result_mass)
@@ -444,73 +445,90 @@ def test_boolean_subtract_verification_pass():
 
 
 def test_boolean_subtract_verification_fail():
-    """Boolean subtract without volume decrease should FAIL."""
-    print("Testing boolean subtract verification - FAIL...")
+    """Boolean subtract with matching mode but wrong volume now returns PASS for mode.
+
+    NOTE: With BIP 11.7, verify_boolean_operation ONLY checks mode (BooleanMode property).
+    Volume checking is done separately by verify_boolean_volume.
+    This test now verifies mode-only behavior."""
+    print("Testing boolean subtract mode verification - mode matches...")
 
     requested = {"mode": "subtract"}
     base_mass = json.dumps({"volume": 1000.0})
-    result_mass = json.dumps({"volume": 1000.0})  # no decrease
+    result_mass = json.dumps({"volume": 1000.0, "properties": {
+        "BooleanMode": "subtract"}})  # mode matches, volume wrong
 
     result, reason = ParameterVerifier.verify_boolean_operation(
         requested, base_mass, result_mass)
-    assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
-    print("  [PASS] Boolean subtract without volume decrease fails")
+    # Mode matches -> PASS (volume checked separately)
+    assert result == VerificationResult.PASS, f"Expected PASS for mode match, got {result}: {reason}"
+    print(
+        "  [PASS] Boolean subtract with correct mode passes (volume checked separately)")
 
 
 def test_boolean_union_verification_pass():
-    """Boolean union with volume increase should PASS."""
-    print("Testing boolean union verification - PASS...")
+    """Boolean union with correct mode should PASS (mode check only)."""
+    print("Testing boolean union mode verification - PASS...")
 
     requested = {"mode": "union"}
     base_mass = json.dumps({"volume": 1000.0})
-    result_mass = json.dumps({"volume": 1500.0})  # volume increased
+    result_mass = json.dumps(
+        {"volume": 1500.0, "properties": {"BooleanMode": "union"}})
 
     result, reason = ParameterVerifier.verify_boolean_operation(
         requested, base_mass, result_mass)
     assert result == VerificationResult.PASS, f"Expected PASS, got {result}: {reason}"
-    print("  [PASS] Boolean union with volume increase")
+    print("  [PASS] Boolean union with correct mode passes")
 
 
 def test_boolean_union_verification_fail():
-    """Boolean union with volume decrease should FAIL."""
-    print("Testing boolean union verification - FAIL...")
+    """Boolean union with correct mode but wrong volume returns PASS for mode.
+
+    NOTE: Mode check passes; volume checked separately."""
+    print("Testing boolean union mode verification - mode matches...")
 
     requested = {"mode": "union"}
     base_mass = json.dumps({"volume": 1000.0})
-    result_mass = json.dumps({"volume": 800.0})  # volume decreased
+    result_mass = json.dumps({"volume": 800.0, "properties": {
+                             "BooleanMode": "union"}})  # mode matches
 
     result, reason = ParameterVerifier.verify_boolean_operation(
         requested, base_mass, result_mass)
-    assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
-    print("  [PASS] Boolean union with volume decrease fails")
+    # Mode matches -> PASS (volume checked separately)
+    assert result == VerificationResult.PASS, f"Expected PASS for mode match, got {result}: {reason}"
+    print("  [PASS] Boolean union with correct mode passes (volume checked separately)")
 
 
 def test_boolean_intersect_verification_pass():
-    """Boolean intersect with volume decrease should PASS."""
-    print("Testing boolean intersect verification - PASS...")
+    """Boolean intersect with correct mode should PASS (mode check only)."""
+    print("Testing boolean intersect mode verification - PASS...")
 
     requested = {"mode": "intersect"}
     base_mass = json.dumps({"volume": 1000.0})
-    result_mass = json.dumps({"volume": 500.0})  # volume decreased
+    result_mass = json.dumps(
+        {"volume": 500.0, "properties": {"BooleanMode": "intersect"}})
 
     result, reason = ParameterVerifier.verify_boolean_operation(
         requested, base_mass, result_mass)
     assert result == VerificationResult.PASS, f"Expected PASS, got {result}: {reason}"
-    print("  [PASS] Boolean intersect with volume decrease")
+    print("  [PASS] Boolean intersect with correct mode passes")
 
 
 def test_boolean_intersect_verification_fail():
-    """Boolean intersect without volume decrease should FAIL."""
-    print("Testing boolean intersect verification - FAIL...")
+    """Boolean intersect with correct mode but wrong volume returns PASS for mode.
+
+    NOTE: Mode check passes; volume checked separately."""
+    print("Testing boolean intersect mode verification - mode matches...")
 
     requested = {"mode": "intersect"}
     base_mass = json.dumps({"volume": 1000.0})
-    result_mass = json.dumps({"volume": 1000.0})  # no decrease
+    result_mass = json.dumps({"volume": 1000.0, "properties": {
+        "BooleanMode": "intersect"}})  # mode matches
 
     result, reason = ParameterVerifier.verify_boolean_operation(
         requested, base_mass, result_mass)
-    assert result == VerificationResult.FAIL, f"Expected FAIL, got {result}: {reason}"
-    print("  [PASS] Boolean intersect without volume decrease fails")
+    # Mode matches -> PASS (volume checked separately)
+    assert result == VerificationResult.PASS, f"Expected PASS for mode match, got {result}: {reason}"
+    print("  [PASS] Boolean intersect with correct mode passes (volume checked separately)")
 
 
 def test_boolean_unknown_mode():

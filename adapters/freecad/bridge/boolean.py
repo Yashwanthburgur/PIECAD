@@ -127,6 +127,11 @@ def _impl_boolean(operation: str, base_obj: str, tool_obj: str, result_name: str
             raise ValueError(f"Unknown boolean operation: {operation}")
         _op_stamp(new_obj, fingerprint)
 
+        # Store boolean mode as custom property for parameter verification (BIP 11.7)
+        if not hasattr(new_obj, "BooleanMode"):
+            new_obj.addProperty("App::PropertyString", "BooleanMode", "PieCAD")
+        new_obj.BooleanMode = str(operation)
+
         # Hide the original objects
         try:
             doc.getObject(base_obj).Visibility = False

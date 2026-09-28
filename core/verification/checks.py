@@ -689,7 +689,62 @@ class ParameterVerifier:
         result_mass_json: str
     ) -> Tuple[VerificationResult, str]:
         """
-        Verify boolean operation type matches volume change.
+        Verify boolean operation mode using explicit BooleanMode property on result object.
+
+        Volume change is NOT used as mode evidence. It is only used for geometric
+        verification (material removal/addition) which runs separately.
+
+        Args:
+            requested: Dict with "mode" (subtract/union/intersect)
+            base_mass_json: get_mass_properties on base (before) - used for volume check
+            result_mass_json: get_mass_properties on result (after) - contains BooleanMode property
+
+        Returns:
+            (VerificationResult, reason)
+        """
+        mode = requested.get("mode")
+        if not mode:
+            return VerificationResult.UNKNOWN, "no mode specified"
+
+        # Extract BooleanMode from result object's properties
+        try:
+            result = json.loads(result_mass_json)
+        except (json.JSONDecodeError, TypeError):
+            return VerificationResult.UNKNOWN, "mass properties JSON did not parse"
+
+        result_props = result.get("properties", {})
+        actual_mode = result_props.get("BooleanMode")
+
+        if actual_mode is None:
+            return VerificationResult.UNKNOWN, "BooleanMode property not found on result object"
+
+        # Normalize both for comparison
+        req_mode = str(mode).strip().lower()
+        act_mode = str(actual_mode).strip().lower()
+
+        valid_modes = {"subtract", "union", "intersect"}
+        if req_mode not in valid_modes:
+            return VerificationResult.UNKNOWN, f"unknown requested boolean mode: {mode}"
+        if act_mode not in valid_modes:
+            return VerificationResult.FAIL, f"malformed BooleanMode on result: {actual_mode}"
+
+        if req_mode != act_mode:
+            return VerificationResult.FAIL, f"boolean mode mismatch: requested {req_mode}, actual {act_mode}"
+
+        # Mode matches - PASS
+        return VerificationResult.PASS, f"boolean mode verified: {req_mode}"
+
+    @staticmethod
+    def verify_boolean_volume(
+        requested: Dict[str, Any],
+        base_mass_json: str,
+        result_mass_json: str
+    ) -> Tuple[VerificationResult, str]:
+        """
+        Verify boolean operation volume change matches expected geometric behavior.
+
+        This is SEPARATE from mode verification. It validates that the boolean
+        actually changed geometry as expected for the given mode.
 
         Args:
             requested: Dict with "mode" (subtract/union/intersect)
@@ -848,7 +903,15 @@ class ParameterVerifier:
                 "get_mass_properties", object_name=target_id)
             result_mass_json = adapter.execute_command(
                 "get_mass_properties", object_name=result_id)
-            return ParameterVerifier.verify_boolean_operation(args, base_mass_json, result_mass_json)
+            # First verify the boolean mode (explicit BooleanMode property)
+            mode_ok, mode_reason = ParameterVerifier.verify_boolean_operation(
+                args, base_mass_json, result_mass_json)
+            if mode_ok != VerificationResult.PASS:
+                return mode_ok, mode_reason
+            # Then verify volume change (geometric verification)
+            vol_ok, vol_reason = ParameterVerifier.verify_boolean_volume(
+                args, base_mass_json, result_mass_json)
+            return vol_ok, vol_reason
 
         else:
             return VerificationResult.UNKNOWN, f"no parameter verifier for tool: {tool}"
