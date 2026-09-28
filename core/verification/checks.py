@@ -5,10 +5,59 @@ Provides CAD-agnostic, mathematically-grounded geometric verification methods.
 These checks operate on JSON output from adapter tools (get_mass_properties, get_faces)
 and contain zero CAD-system-specific terminology or imports.
 """
-
 import json
 import math
-from typing import List, Dict, Any, Tuple
+from enum import Enum
+from typing import List, Dict, Any, Tuple, Optional
+
+
+class VerificationResult(Enum):
+    """Result of a parameter verification."""
+    PASS = "pass"
+    FAIL = "fail"
+    UNKNOWN = "unknown"
+
+
+# --------------------------------------------------------------------------- #
+# Centralized Tolerance Configuration
+# --------------------------------------------------------------------------- #
+# All tolerances are in millimeters unless otherwise noted.
+# Tolerances are chosen to be tighter than typical manufacturing tolerances
+# while accommodating FreeCAD's internal floating-point representation.
+#
+# DIMENSIONAL_TOLERANCE: General dimensional comparisons (length, width, height,
+# radius, diameter, depth, distance). 1e-3 mm = 1 micron, well within typical
+# CAD kernel precision.
+# ANGULAR_TOLERANCE: Angular comparisons in degrees. 1e-3 degrees approx 17 µrad.
+# POSITION_TOLERANCE: Position/origin comparisons. Same as dimensional.
+# VOLUME_TOLERANCE: Volume comparisons relative to magnitude. 1e-6 relative.
+# COUNT_TOLERANCE: Exact integer comparison (patterns). No tolerance.
+# DEPTH_TOLERANCE: Depth comparisons for holes/pockets. 1e-3 mm.
+# THREAD_TOLERANCE: Thread parameter comparisons. 1e-3 mm.
+DIMENSIONAL_TOLERANCE = 1e-3
+ANGULAR_TOLERANCE = 1e-3
+POSITION_TOLERANCE = 1e-3
+VOLUME_RELATIVE_TOLERANCE = 1e-6
+COUNT_TOLERANCE = 0  # Exact integer match
+DEPTH_TOLERANCE = 1e-3
+THREAD_TOLERANCE = 1e-3
+
+
+def _float_equal(a: float, b: float, tol: float = DIMENSIONAL_TOLERANCE) -> bool:
+    """Compare two floats with absolute tolerance."""
+    return abs(a - b) <= tol
+
+
+def _float_equal_rel(a: float, b: float, tol: float = VOLUME_RELATIVE_TOLERANCE) -> bool:
+    """Compare two floats with relative tolerance (for volume)."""
+    if a == 0 and b == 0:
+        return True
+    return abs(a - b) / max(abs(a), abs(b)) <= tol
+
+
+def _int_equal(a: int, b: int) -> bool:
+    """Exact integer comparison."""
+    return a == b
 
 
 class _Vector3:
@@ -230,14 +279,14 @@ class GeometryVerifier:
         except Exception:
             return False, "invalid center/normal data"
 
-        # Check normals are opposing (dot product ≈ -1)
+        # Check normals are opposing (dot product approx -1)
         if abs(m_n.Length - 1.0) > 1e-6:
             m_n.normalize()
         if abs(f_n.Length - 1.0) > 1e-6:
             f_n.normalize()
 
         dot = m_n.dot(f_n)
-        if dot > -0.9999:  # Should be ≈ -1 for opposing faces
+        if dot > -0.9999:  # Should be approx -1 for opposing faces
             return False, f"face normals not opposing (dot={dot:.4f})"
 
         # Check coplanarity: distance from moving face center to fixed face plane
@@ -288,12 +337,12 @@ class GeometryVerifier:
         except Exception:
             return False, "invalid center/axis data"
 
-        # Check axes are parallel (cross product length ≈ 0)
+        # Check axes are parallel (cross product length approx 0)
         cross_len = m_a.cross(f_a).Length
         if cross_len > tolerance:
             return False, f"axes not parallel (cross={cross_len:.6f} > {tolerance})"
 
-        # Check centers are aligned along axis (perpendicular distance ≈ 0)
+        # Check centers are aligned along axis (perpendicular distance approx 0)
         # Vector between centers
         center_diff = m_c - f_c
         # Project onto axis
@@ -304,6 +353,408 @@ class GeometryVerifier:
             return False, f"centers not aligned (perp_dist={perp_dist:.6f} > {tolerance})"
 
         return True, f"concentric mate verified (axis_cross={cross_len:.6f}, perp_dist={perp_dist:.6f})"
+
+
+# --------------------------------------------------------------------------- #
+# Parameter-Level Verification (BIP 11.1)
+# --------------------------------------------------------------------------- #
+
+class ParameterVerifier:
+    """
+    Verifies that requested operation parameters match actual CAD results.
+
+    All methods return VerificationResult:
+    - PASS: requested parameter matches live CAD property/geometry within tolerance
+    - FAIL: requested parameter demonstrably differs from live CAD
+    - UNKNOWN: evidence unavailable or insufficient to decide
+    """
+
+    @staticmethod
+    def _get_property(props: Dict[str, Any], key: str) -> Optional[float]:
+        """Extract a float property from a properties dict."""
+        if not isinstance(props, dict):
+            return None
+        val = props.get(key)
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def verify_box_parameters(
+        requested: Dict[str, Any],
+        actual_props: Dict[str, Any]
+    ) -> Tuple[VerificationResult, str]:
+        """
+        Verify box dimensions match requested values.
+
+        Args:
+            requested: Dict with requested "length", "width", "height"
+            actual_props: Live properties dict from CAD state (keys: Length, Width, Height)
+
+        Returns:
+            (VerificationResult, reason)
+        """
+        failures = []
+        for req_key, actual_key in [("length", "Length"), ("width", "Width"), ("height", "Height")]:
+            req_val = requested.get(req_key)
+            act_val = ParameterVerifier._get_property(actual_props, actual_key)
+            if req_val is None:
+                continue
+            if act_val is None:
+                return VerificationResult.UNKNOWN, f"Property {actual_key} unavailable in live state"
+            if not _float_equal(float(req_val), act_val):
+                failures.append(
+                    f"{req_key}: requested {req_val}, got {act_val}")
+        if failures:
+            return VerificationResult.FAIL, "; ".join(failures)
+        return VerificationResult.PASS, "box dimensions match requested values"
+
+    @staticmethod
+    def verify_cylinder_parameters(
+        requested: Dict[str, Any],
+        actual_props: Dict[str, Any]
+    ) -> Tuple[VerificationResult, str]:
+        """
+        Verify cylinder radius and height match requested values.
+
+        Args:
+            requested: Dict with requested "radius", "height"
+            actual_props: Live properties dict from CAD state (keys: Radius, Height)
+
+        Returns:
+            (VerificationResult, reason)
+        """
+        failures = []
+        for req_key, actual_key in [("radius", "Radius"), ("height", "Height")]:
+            req_val = requested.get(req_key)
+            act_val = ParameterVerifier._get_property(actual_props, actual_key)
+            if req_val is None:
+                continue
+            if act_val is None:
+                return VerificationResult.UNKNOWN, f"Property {actual_key} unavailable in live state"
+            if not _float_equal(float(req_val), act_val):
+                failures.append(
+                    f"{req_key}: requested {req_val}, got {act_val}")
+        if failures:
+            return VerificationResult.FAIL, "; ".join(failures)
+        return VerificationResult.PASS, "cylinder dimensions match requested values"
+
+    @staticmethod
+    def verify_hole_parameters(
+        requested: Dict[str, Any],
+        hole_mass_json: str,
+        drill_props: Optional[Dict[str, Any]] = None
+    ) -> Tuple[VerificationResult, str]:
+        """
+        Verify hole parameters where evidence permits.
+
+        Evidence sources:
+        - hole_mass_json: get_mass_properties on the resulting cut object
+        - drill_props: live properties of the drill tool (Radius, Height) if available
+
+        Args:
+            requested: Dict with "diameter", "depth", "kind", "thread_spec"
+            hole_mass_json: get_mass_properties result on the hole result object
+            drill_props: Optional properties of the drill tool object
+
+        Returns:
+            (VerificationResult, reason)
+        """
+        failures = []
+        unknowns = []
+
+        # Verify diameter via drill tool if available
+        req_diameter = requested.get("diameter")
+        if req_diameter is not None:
+            if drill_props:
+                act_radius = ParameterVerifier._get_property(
+                    drill_props, "Radius")
+                if act_radius is not None:
+                    exp_radius = float(req_diameter) / 2.0
+                    if not _float_equal(exp_radius, act_radius):
+                        failures.append(
+                            f"diameter: requested {req_diameter}, drill radius implies {act_radius * 2}")
+                else:
+                    unknowns.append("diameter (drill radius unavailable)")
+            else:
+                unknowns.append("diameter (drill tool properties unavailable)")
+
+        # Verify depth via drill tool Height if available
+        req_depth = requested.get("depth")
+        if req_depth is not None:
+            if drill_props:
+                act_height = ParameterVerifier._get_property(
+                    drill_props, "Height")
+                if act_height is not None:
+                    # Drill height = depth + 2mm over-drill (coplanar-face hardening)
+                    exp_height = float(req_depth) + 2.0
+                    if not _float_equal(exp_height, act_height):
+                        failures.append(
+                            f"depth: requested {req_depth}, drill height implies {act_height - 2.0} (with +2mm over-drill)")
+                else:
+                    unknowns.append("depth (drill height unavailable)")
+            else:
+                unknowns.append("depth (drill tool properties unavailable)")
+
+        # Thread parameters - UNKNOWN if not represented in CAD
+        req_kind = requested.get("kind", "simple")
+        req_thread = requested.get("thread_spec")
+        if req_kind == "tapped" and req_thread:
+            # ThreadSpec property may or may not be present on cut object
+            unknowns.append(
+                f"thread_spec {req_thread} (CAD representation not verified)")
+
+        if failures:
+            return VerificationResult.FAIL, "; ".join(failures)
+        if unknowns and not failures:
+            return VerificationResult.UNKNOWN, "; ".join(unknowns)
+        return VerificationResult.PASS, "hole parameters match where evidence available"
+
+    @staticmethod
+    def verify_fillet_parameters(
+        requested: Dict[str, Any],
+        fillet_props: Optional[Dict[str, Any]] = None
+    ) -> Tuple[VerificationResult, str]:
+        """
+        Verify fillet radius. FreeCAD Part::Fillet stores radii per-edge in Edges list,
+        not as a single Radius property. Evidence may be limited.
+
+        Args:
+            requested: Dict with "radius"
+            fillet_props: Live properties of the fillet feature (if available)
+
+        Returns:
+            (VerificationResult, reason)
+        """
+        req_radius = requested.get("radius")
+        if req_radius is None:
+            return VerificationResult.UNKNOWN, "no radius requested"
+        # Part::Fillet has no .Radius property; radii stored per-edge in Edges list.
+        # We cannot reliably extract individual edge radii from properties dict alone.
+        # Bridge could expose them but current state doesn't.
+        return VerificationResult.UNKNOWN, "fillet radius verification requires per-edge Edges list access (not in properties)"
+
+    @staticmethod
+    def verify_chamfer_parameters(
+        requested: Dict[str, Any],
+        chamfer_props: Optional[Dict[str, Any]] = None
+    ) -> Tuple[VerificationResult, str]:
+        """
+        Verify chamfer size. Part::Chamfer stores distances per-edge in Edges list.
+
+        Args:
+            requested: Dict with "size"
+            chamfer_props: Live properties of the chamfer feature
+
+        Returns:
+            (VerificationResult, reason)
+        """
+        req_size = requested.get("size")
+        if req_size is None:
+            return VerificationResult.UNKNOWN, "no size requested"
+        # Part::Chamfer has no .Size property; distances stored per-edge.
+        return VerificationResult.UNKNOWN, "chamfer size verification requires per-edge Edges list access (not in properties)"
+
+    @staticmethod
+    def verify_pattern_count(
+        requested: Dict[str, Any],
+        pattern_props: Optional[Dict[str, Any]] = None,
+        target_faces_json: Optional[str] = None
+    ) -> Tuple[VerificationResult, str]:
+        """
+        Verify pattern occurrence count.
+
+        For linear/circular patterns, the count is a construction parameter.
+        Best evidence: if pattern was created via multiFuse of N copies,
+        face count increase correlates but is not exact.
+        FreeCAD pattern features don't expose count as a queryable property.
+
+        Args:
+            requested: Dict with "count"
+            pattern_props: Live properties (no count property exposed)
+            target_faces_json: get_faces result for the pattern result (optional)
+
+        Returns:
+            (VerificationResult, reason)
+        """
+        req_count = requested.get("count")
+        if req_count is None:
+            return VerificationResult.UNKNOWN, "no count requested"
+        # No reliable property exposes the pattern count in current FreeCAD representation.
+        # Face count increase is a proxy but not exact (depends on geometry).
+        return VerificationResult.UNKNOWN, "pattern count not exposed as queryable property in current CAD representation"
+
+    @staticmethod
+    def verify_boolean_operation(
+        requested: Dict[str, Any],
+        base_mass_json: str,
+        result_mass_json: str
+    ) -> Tuple[VerificationResult, str]:
+        """
+        Verify boolean operation type matches volume change.
+
+        Args:
+            requested: Dict with "mode" (subtract/union/intersect)
+            base_mass_json: get_mass_properties on base (before)
+            result_mass_json: get_mass_properties on result (after)
+
+        Returns:
+            (VerificationResult, reason)
+        """
+        mode = requested.get("mode")
+        if not mode:
+            return VerificationResult.UNKNOWN, "no mode specified"
+        try:
+            base = json.loads(base_mass_json)
+            result = json.loads(result_mass_json)
+        except (json.JSONDecodeError, TypeError):
+            return VerificationResult.UNKNOWN, "mass properties JSON did not parse"
+        base_vol = float(base.get("volume", 0.0))
+        result_vol = float(result.get("volume", 0.0))
+
+        if mode == "subtract":
+            # Volume must decrease
+            if result_vol < base_vol:
+                return VerificationResult.PASS, f"boolean subtract: volume decreased ({base_vol} -> {result_vol})"
+            else:
+                return VerificationResult.FAIL, f"boolean subtract expected volume decrease, got {base_vol} -> {result_vol}"
+        elif mode == "union":
+            # Volume must increase (or stay same if disjoint)
+            if result_vol >= base_vol:
+                return VerificationResult.PASS, f"boolean union: volume non-decreased ({base_vol} -> {result_vol})"
+            else:
+                return VerificationResult.FAIL, f"boolean union expected volume increase, got {base_vol} -> {result_vol}"
+        elif mode == "intersect":
+            # Volume must decrease (intersection is subset)
+            if result_vol < base_vol:
+                return VerificationResult.PASS, f"boolean intersect: volume decreased ({base_vol} -> {result_vol})"
+            else:
+                return VerificationResult.FAIL, f"boolean intersect expected volume decrease, got {base_vol} -> {result_vol}"
+        else:
+            return VerificationResult.UNKNOWN, f"unknown boolean mode: {mode}"
+
+    @staticmethod
+    def verify_operation(
+        tool: str,
+        args: Dict[str, Any],
+        adapter: Any,
+        result_id: Optional[str] = None,
+        target_id: Optional[str] = None
+    ) -> Tuple[VerificationResult, str]:
+        """
+        Dispatch to the appropriate parameter verifier for the given tool.
+
+        Args:
+            tool: Tool name (box, cylinder, hole, fillet, chamfer, pattern_linear,
+                  pattern_circular, boolean)
+            args: Tool arguments as passed to the operation
+            adapter: CADAdapter instance for querying live state
+            result_id: ID of the created/modified result object
+            target_id: ID of the target object
+
+        Returns:
+            (VerificationResult, reason)
+        """
+        if tool == "box":
+            if not result_id:
+                return VerificationResult.UNKNOWN, "no result_id for box"
+            props_json = adapter.execute_command(
+                "get_mass_properties", object_name=result_id)
+            try:
+                props = json.loads(props_json)
+                actual_props = props.get("properties", {})
+            except (json.JSONDecodeError, TypeError):
+                return VerificationResult.UNKNOWN, "could not parse box properties"
+            return ParameterVerifier.verify_box_parameters(args, actual_props)
+
+        elif tool == "cylinder":
+            if not result_id:
+                return VerificationResult.UNKNOWN, "no result_id for cylinder"
+            props_json = adapter.execute_command(
+                "get_mass_properties", object_name=result_id)
+            try:
+                props = json.loads(props_json)
+                actual_props = props.get("properties", {})
+            except (json.JSONDecodeError, TypeError):
+                return VerificationResult.UNKNOWN, "could not parse cylinder properties"
+            return ParameterVerifier.verify_cylinder_parameters(args, actual_props)
+
+        elif tool == "hole":
+            if not result_id or not target_id:
+                return VerificationResult.UNKNOWN, "missing result_id or target_id for hole"
+            hole_mass_json = adapter.execute_command(
+                "get_mass_properties", object_name=result_id)
+            # Try to get drill tool properties
+            drill_props = None
+            if target_id:
+                # The drill tool is named {result_id}_drill
+                try:
+                    drill_props_json = adapter.execute_command(
+                        "get_mass_properties", object_name=f"{result_id}_drill")
+                    drill_props = json.loads(
+                        drill_props_json).get("properties", {})
+                except (json.JSONDecodeError, TypeError, Exception):
+                    pass
+            return ParameterVerifier.verify_hole_parameters(args, hole_mass_json, drill_props)
+
+        elif tool == "fillet":
+            if not result_id:
+                return VerificationResult.UNKNOWN, "no result_id for fillet"
+            try:
+                fillet_props_json = adapter.execute_command(
+                    "get_mass_properties", object_name=result_id)
+                fillet_props = json.loads(
+                    fillet_props_json).get("properties", {})
+            except (json.JSONDecodeError, TypeError):
+                fillet_props = None
+            return ParameterVerifier.verify_fillet_parameters(args, fillet_props)
+
+        elif tool == "chamfer":
+            if not result_id:
+                return VerificationResult.UNKNOWN, "no result_id for chamfer"
+            try:
+                chamfer_props_json = adapter.execute_command(
+                    "get_mass_properties", object_name=result_id)
+                chamfer_props = json.loads(
+                    chamfer_props_json).get("properties", {})
+            except (json.JSONDecodeError, TypeError):
+                chamfer_props = None
+            return ParameterVerifier.verify_chamfer_parameters(args, chamfer_props)
+
+        elif tool in ("pattern_linear", "pattern_circular"):
+            if not result_id:
+                return VerificationResult.UNKNOWN, f"no result_id for {tool}"
+            try:
+                pattern_props_json = adapter.execute_command(
+                    "get_mass_properties", object_name=result_id)
+                pattern_props = json.loads(
+                    pattern_props_json).get("properties", {})
+            except (json.JSONDecodeError, TypeError):
+                pattern_props = None
+            # Try to get target faces for additional evidence
+            target_faces_json = None
+            if target_id:
+                try:
+                    target_faces_json = adapter.execute_command(
+                        "get_faces", object_name=target_id)
+                except Exception:
+                    pass
+            return ParameterVerifier.verify_pattern_count(args, pattern_props, target_faces_json)
+
+        elif tool == "boolean":
+            if not result_id or not target_id:
+                return VerificationResult.UNKNOWN, "missing result_id or target_id for boolean"
+            base_mass_json = adapter.execute_command(
+                "get_mass_properties", object_name=target_id)
+            result_mass_json = adapter.execute_command(
+                "get_mass_properties", object_name=result_id)
+            return ParameterVerifier.verify_boolean_operation(args, base_mass_json, result_mass_json)
+
+        else:
+            return VerificationResult.UNKNOWN, f"no parameter verifier for tool: {tool}"
 
 
 def check_geometry(state_objects: list) -> List[str]:

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from providers.llm.provider import LLMProvider
 from core.adapters.interfaces import CADAdapter
 from core.router import ToolRouter
-from core.verification.checks import check_geometry, GeometryVerifier
+from core.verification.checks import check_geometry, GeometryVerifier, ParameterVerifier, VerificationResult
 # Context Engine (BIP 4.2): provider-independent state / memory / compilation.
 from core.context import (
     ContextCompiler,
@@ -1603,6 +1603,39 @@ class CADAgent:
                                 # Verification error - log but don't fail the operation
                                 print(
                                     f"[VERIFY] Warning: Mate verification check failed: {e}")
+
+                    # BIP 11.1: Parameter-level verification
+                    # Verify that requested parameters match actual CAD result.
+                    # This runs after geometric verification passes.
+                    if success and name in ("box", "cylinder", "hole", "fillet", "chamfer",
+                                            "pattern_linear", "pattern_circular", "boolean"):
+                        try:
+                            param_ok, param_reason = ParameterVerifier.verify_operation(
+                                tool=name, args=args, adapter=self.adapter,
+                                result_id=args.get("id"), target_id=args.get("target_id"))
+                            if param_ok == VerificationResult.FAIL:
+                                error_msg = f"Parameter verification failed: {param_reason}"
+                                print(f"\033[91m[VERIFY] {error_msg}\033[0m")
+                                success = False
+                                results[-1] = json.dumps({
+                                    "status": "error",
+                                    "tool": name,
+                                    "error_type": "ParameterVerificationError",
+                                    "error": error_msg,
+                                    "arguments": args,
+                                    "transient": False,
+                                    "retries": 0,
+                                }, default=str)
+                                self._operation_registry.fail(
+                                    operation_id, "ParameterVerificationError", error_msg)
+                                if is_mutation and gate_acquired:
+                                    self._mutation_gate.release(operation_id)
+                            elif param_ok == VerificationResult.UNKNOWN:
+                                print(
+                                    f"[VERIFY] Parameter verification UNKNOWN: {param_reason}")
+                        except Exception as e:
+                            print(
+                                f"[VERIFY] Warning: Parameter verification check failed: {e}")
                 else:
                     if error is None:
                         error = RuntimeError(
