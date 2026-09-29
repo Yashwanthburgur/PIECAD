@@ -9,6 +9,7 @@ from core.adapters.interfaces import CADAdapter
 import os
 import tempfile
 import importlib
+import time
 
 ACTIVE_CAD_ADAPTER = os.getenv("ACTIVE_CAD_ADAPTER", "freecad")
 ADAPTER_FACTORY = {
@@ -42,13 +43,40 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+    telemetry: dict | None = None
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
+    # A3.2: Start wall-clock timer before handle_message
+    start_time = time.time()
+
     # handle_message now returns (response_text, session_tools); take the text.
     reply, session_tools = agent.handle_message(request.message)
-    return ChatResponse(reply=reply)
+
+    # A3.2: Stop timer and fetch telemetry
+    duration = time.time() - start_time
+    token_telemetry = agent.get_token_telemetry()
+    total_tokens = token_telemetry.get("total_tokens", 0)
+    # Steps = number of LLM calls for this turn
+    steps = token_telemetry.get("llm_calls", 0)
+    # RPC Trips not implemented yet (A3.3)
+    rpc_count = 0
+
+    # A3.2: Print compact console summary
+    print(
+        f"[TURN_SUMMARY] Steps: {steps} | Tokens: {total_tokens} | RPC Trips: {rpc_count} | Time: {duration:.3f}s")
+
+    # A3.2: Add telemetry to response
+    telemetry = {
+        "duration_seconds": duration,
+        "steps": steps,
+        "total_tokens": total_tokens,
+        "rpc_trips": rpc_count,
+        "token_telemetry": token_telemetry,
+    }
+
+    return ChatResponse(reply=reply, telemetry=telemetry)
 
 
 @app.get("/api/telemetry/turn")
