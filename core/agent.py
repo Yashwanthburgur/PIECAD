@@ -285,21 +285,6 @@ class CADAgent:
             for c in conventions
         ]
 
-    def _is_transient_error(self, error: RuntimeError) -> bool:
-        """Return True if the RuntimeError wraps a transient connection/transport failure.
-
-        The FreeCADAdapter wraps xmlrpc.client.ProtocolError, ConnectionError, and OSError
-        into RuntimeError. We check the error message for indicators of transient failures.
-        """
-        msg = str(error).lower()
-        # Connection-related transient indicators (covers XML-RPC and direct connection errors)
-        transient_indicators = [
-            "connection", "reset", "refused", "timeout", "unreachable",
-            "broken pipe", "connection aborted", "connection lost",
-            "cannot reach", "cannot connect",
-        ]
-        return any(ind in msg for ind in transient_indicators)
-
     # BIP 10.3: Detect and record explicit design conventions from user messages
     def _maybe_record_convention_from_message(self, message: str) -> None:
         """Extract and record explicit design conventions from user message.
