@@ -21,6 +21,7 @@ exports/*.obj
 # Runtime telemetry / datasets (never commit measured runs)
 runtime/
 logs/
+runs/
 
 # Stray shell-redirect capture artifacts (e.g. pip output redirected to a
 # file named after a version string).

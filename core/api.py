@@ -10,6 +10,9 @@ import os
 import tempfile
 import importlib
 import time
+import json
+from datetime import datetime
+from pathlib import Path
 
 ACTIVE_CAD_ADAPTER = os.getenv("ACTIVE_CAD_ADAPTER", "freecad")
 ADAPTER_FACTORY = {
@@ -77,6 +80,46 @@ async def chat_endpoint(request: ChatRequest):
         "rpc_trips": rpc_count,
         "token_telemetry": token_telemetry,
     }
+
+    # A3.4: Persist turn telemetry to JSONL file (best-effort, never fails the request)
+    try:
+        runs_dir = Path("runs")
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = runs_dir / "turns.jsonl"
+
+        # Determine success/failure status from reply
+        is_error = reply.startswith("Operation stopped") or reply.startswith(
+            "LLM request failed") or reply.startswith("Operation incomplete")
+        termination_reason = "success"
+        if "deadline" in reply:
+            termination_reason = "turn_deadline"
+        elif "token ceiling" in reply:
+            termination_reason = "token_ceiling"
+        elif "max_steps" in reply or "maximum reasoning steps" in reply:
+            termination_reason = "max_steps"
+        elif "LLM provider unavailable" in reply:
+            termination_reason = "llm_transient_exhausted"
+        elif "LLM request failed" in reply:
+            termination_reason = "llm_error"
+        elif is_error:
+            termination_reason = "error"
+
+        record = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "prompt": request.message,
+            "steps": steps,
+            "total_tokens": total_tokens,
+            "rpc_trips": rpc_count,
+            "duration_seconds": duration,
+            "success": not is_error,
+            "termination_reason": termination_reason,
+        }
+
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        # Logging failure must NOT cause /chat to fail
+        pass
 
     return ChatResponse(reply=reply, telemetry=telemetry)
 
