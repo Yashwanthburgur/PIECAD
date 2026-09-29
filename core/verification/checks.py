@@ -613,30 +613,6 @@ class ParameterVerifier:
     def verify_pattern_count(
         requested: Dict[str, Any],
         pattern_props: Optional[Dict[str, Any]] = None,
-        target_faces_json: Optional[str] = None
-    ) -> Tuple[VerificationResult, str]:
-        """
-        Verify pattern occurrence count.
-
-        FreeCAD pattern features now store count as custom property PatternCount
-        for parameter verification (BIP 11.4).
-
-        Args:
-            requested: Dict with "count"
-            pattern_props: Live properties of the pattern feature (if available)
-            target_faces_json: get_faces result for the pattern result (optional)
-
-        Returns:
-            (VerificationResult, reason)
-        """
-        req_count = requested.get("count")
-        if req_count is None:
-            return VerificationResult.UNKNOWN, "no count requested"
-
-    @staticmethod
-    def verify_pattern_count(
-        requested: Dict[str, Any],
-        pattern_props: Optional[Dict[str, Any]] = None,
         target_faces_json: Optional[str] = None,
         expected_type: Optional[str] = None
     ) -> Tuple[VerificationResult, str]:

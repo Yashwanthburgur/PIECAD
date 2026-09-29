@@ -16,6 +16,16 @@ current_state.obj
 exports/*.step
 exports/*.stl
 exports/*.glb
+exports/*.obj
+
+# Runtime telemetry / datasets (never commit measured runs)
+runtime/
+logs/
+
+# Stray shell-redirect capture artifacts (e.g. pip output redirected to a
+# file named after a version string).
+/1.25.0
+/p/
 
 # OS & Editors
 .DS_Store

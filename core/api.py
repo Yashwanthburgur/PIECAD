@@ -47,8 +47,37 @@ class ChatResponse(BaseModel):
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     # handle_message now returns (response_text, session_tools); take the text.
-    reply, _session_tools = agent.handle_message(request.message)
+    reply, session_tools = agent.handle_message(request.message)
     return ChatResponse(reply=reply)
+
+
+@app.get("/api/telemetry/turn")
+async def get_turn_telemetry():
+    """Return per-turn telemetry metrics from the last handle_message call."""
+    return {
+        "token_telemetry": agent._token_telemetry,
+        "context_telemetry": agent._context_telemetry,
+        "router_token_savings": agent._router_token_savings,
+    }
+
+
+@app.get("/api/telemetry/reset")
+async def reset_telemetry():
+    """Reset telemetry accumulators."""
+    agent._token_telemetry = {
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_tokens": 0,
+        "llm_calls": 0,
+        "model": None,
+        "provider": None,
+        "per_step": [],
+        "usage_unavailable_calls": 0,
+        "ceiling_reached": False,
+    }
+    agent._context_telemetry = []
+    agent._router_token_savings = []
+    return {"status": "telemetry reset"}
 
 
 @app.get("/api/state/obj")
