@@ -1,6 +1,7 @@
 """PieCAD Core Orchestrator. CAD-agnostic."""
 import json
 import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from providers.llm.provider import LLMProvider
 from core.adapters.interfaces import CADAdapter
@@ -142,6 +143,35 @@ REACT_LOOP_INJECTION = """You are in a multi-step ReAct loop. DO NOT output conv
 - Only respond with plain text (no tool calls) when the ENTIRE user request is satisfied.
 - NEVER delete objects you just created unless the user explicitly asked to undo.
 """
+
+
+@dataclass
+class ToolExecutionResult:
+    """Explicit result of a single tool execution attempt (A6.3).
+
+    Replaces the previous positional 12-tuple + ``"__malformed__"`` string
+    sentinel contract of ``_execute_tool_calls``. Fields carry exactly the
+    values the caller consumed from the tuple, plus ``malformed`` to represent
+    malformed tool calls explicitly instead of via a magic string.
+    """
+
+    name: Any = None
+    args: Dict[str, Any] = field(default_factory=dict)
+    target: Any = None
+    out: Any = None
+    error: Any = None
+    success: bool = False
+    attempts: int = 0
+    transient: bool = False
+    operation_id: Optional[str] = None
+    is_mutation: bool = False
+    gate_acquired: bool = False
+    requested_args_for_recording: Any = None
+    # When True this is a malformed-arguments result: ``malformed_result`` holds
+    # the pre-serialized structured error to append to the caller's ``results``,
+    # and no verification/execution/topology logic ran.
+    malformed: bool = False
+    malformed_result: Any = None
 
 
 class CADAgent:
@@ -512,9 +542,9 @@ class CADAgent:
         ``handle_message`` (A5.6). Mutates ``self._operation_counter``,
         ``self._operation_registry``, ``self._mutation_gate``,
         ``self._last_failed_args``, ``self.router`` and ``self.design_state`` as
-        before. Returns the list of tool results aligned 1:1 with ``tool_calls``.
+        before. Yields one :class:`ToolExecutionResult` per tool call, aligned
+        1:1 with ``tool_calls`` (A6.3 named-result contract).
         """
-        results = []
 
         for tc in tool_calls:
             name = tc.function.name
@@ -556,7 +586,9 @@ class CADAgent:
                 # Hand the structured error to the caller so it is appended to
                 # the caller's ``results`` (aligned 1:1 with tool_calls) and
                 # skipped by verification, exactly as before.
-                yield ("__malformed__", malformed_result)
+                yield ToolExecutionResult(
+                    name=name, malformed=True,
+                    malformed_result=malformed_result)
                 continue
 
             # Target object id for requested-vs-achieved tracking (BIP 4.3.2).
@@ -735,9 +767,20 @@ class CADAgent:
                 if failed_args != args:
                     requested_args_for_recording = failed_args
 
-            yield name, args, target, out, error, success, attempts, transient, \
-                operation_id, is_mutation, gate_acquired, \
-                requested_args_for_recording
+            yield ToolExecutionResult(
+                name=name,
+                args=args,
+                target=target,
+                out=out,
+                error=error,
+                success=success,
+                attempts=attempts,
+                transient=transient,
+                operation_id=operation_id,
+                is_mutation=is_mutation,
+                gate_acquired=gate_acquired,
+                requested_args_for_recording=requested_args_for_recording,
+            )
 
     def _evaluate_termination(
         self,
@@ -1846,21 +1889,32 @@ class CADAgent:
             results = []
 
             # A5.5: drive the extracted tool-execution generator. The generator
-            # yields one tuple per tool call; the verification, state-refresh and
-            # topology-refresh blocks below remain inline (A5.6) and re-bind the
-            # same local variable names to preserve behaviour exactly.
+            # yields one ToolExecutionResult per tool call (A6.3); the
+            # verification, state-refresh and topology-refresh blocks below
+            # remain inline (A5.6) and re-bind the same local variable names to
+            # preserve behaviour exactly.
             self._session_tools_for_step = session_tools
-            for _payload in self._execute_tool_calls(
+            for _result in self._execute_tool_calls(
                     response.tool_calls, step + 1):
-                # Malformed tool arguments: the generator yields the structured
-                # error under a sentinel; append it to ``results`` (aligned 1:1
-                # with tool_calls) and skip verification for this call.
-                if len(_payload) == 2 and _payload[0] == "__malformed__":
-                    results.append(_payload[1])
+                # Malformed tool arguments: append the structured error to
+                # ``results`` (aligned 1:1 with tool_calls) and skip
+                # verification for this call.
+                if _result.malformed:
+                    results.append(_result.malformed_result)
                     continue
-                (name, args, target, out, error, success, attempts, transient,
-                 operation_id, is_mutation, gate_acquired,
-                 requested_args_for_recording) = _payload
+                name = _result.name
+                args = _result.args
+                target = _result.target
+                out = _result.out
+                error = _result.error
+                success = _result.success
+                attempts = _result.attempts
+                transient = _result.transient
+                operation_id = _result.operation_id
+                is_mutation = _result.is_mutation
+                gate_acquired = _result.gate_acquired
+                requested_args_for_recording = \
+                    _result.requested_args_for_recording
 
                 # A5.6: mandatory post-tool verification (BIP 8.1/8.2/8.3/8.4/11.1).
                 # A failed verification converts success to False and records the
