@@ -49,14 +49,15 @@ class ChatResponse(BaseModel):
     telemetry: dict | None = None
 
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
-    # A3.2: Start wall-clock timer before handle_message
-    start_time = time.time()
+def _finalize_turn(agent: CADAgent, reply: str, request_message: str,
+                   start_time: float) -> ChatResponse:
+    """A5.7: Turn finalization/bookkeeping for a completed /chat turn.
 
-    # handle_message now returns (response_text, session_tools); take the text.
-    reply, session_tools = agent.handle_message(request.message)
-
+    Extracted verbatim from ``chat_endpoint``: wall-clock duration,
+    token-telemetry fetch, step/RPC accounting (+ RPC counter reset), the
+    compact console summary, the response telemetry dict, the best-effort
+    per-turn JSONL run log, and the structured ``ChatResponse``.
+    """
     # A3.2/A3.3: Stop timer and fetch telemetry
     duration = time.time() - start_time
     token_telemetry = agent.get_token_telemetry()
@@ -106,7 +107,7 @@ async def chat_endpoint(request: ChatRequest):
 
         record = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "prompt": request.message,
+            "prompt": request_message,
             "steps": steps,
             "total_tokens": total_tokens,
             "rpc_trips": rpc_count,
@@ -122,6 +123,19 @@ async def chat_endpoint(request: ChatRequest):
         pass
 
     return ChatResponse(reply=reply, telemetry=telemetry)
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(request: ChatRequest):
+    # A3.2: Start wall-clock timer before handle_message
+    start_time = time.time()
+
+    # handle_message now returns (response_text, session_tools); take the text.
+    reply, session_tools = agent.handle_message(request.message)
+
+    # A5.7: finalize the turn (timing + telemetry + run logging) and build
+    # the structured response.
+    return _finalize_turn(agent, reply, request.message, start_time)
 
 
 @app.get("/api/telemetry/turn")
