@@ -8,11 +8,14 @@ from core.router import ToolRouter
 from core.verification.checks import check_geometry, GeometryVerifier, ParameterVerifier, VerificationResult
 # Context Engine (BIP 4.2): provider-independent state / memory / compilation.
 from core.context import (
+    CompiledContext,
     ContextCompiler,
+    ContextPlan,
     ConversationContext,
     DesignState,
     SessionMemory,
     StaleTopologyError,
+    ToolSelectionPlan,
 )
 from core.intent import IntentClassifier
 from core.tool_registry import get_global_registry, infer_capability_from_schema
@@ -329,6 +332,25 @@ class CADAgent:
                     self.record_design_convention(key, value, source="user")
                     break
 
+    def _classify_intent(self, user_message: str):
+        """Classify user intent and convert to context plan.
+
+        Args:
+            user_message: The user's input message to classify.
+
+        Returns:
+            Tuple of (intent_plan, intent_tool_plan) where:
+            - intent_plan: The context plan from intent classifier
+            - intent_tool_plan: The tool selection plan from intent classifier
+        """
+        intent_result = self.intent_classifier.classify(user_message)
+        intent_plan = self.intent_classifier.to_context_plan(
+            intent_result, user_message)
+        intent_tool_plan = intent_result.tool_selection_plan
+        print(f"[Agent] Intent classified: {intent_result.primary_intent} "
+              f"(confidence={intent_result.confidence:.2f}, "
+              f"tools={len(intent_result.required_tools)})")
+        return intent_plan, intent_tool_plan
     # Deterministic CAD-kernel failure markers. A kernel/geometry failure is
     # NEVER transient, even when its message happens to contain a transient-
     # looking word (e.g. "Shape heal timeout", "Recompute Failed ... timeout").
@@ -477,6 +499,814 @@ class CADAgent:
                     f"{self.MAX_LLM_RETRIES + 1} attempts: {last_error}\033[0m")
                 return None
         return None
+
+    def _invoke_llm(
+        self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]
+    ) -> Any:
+        """Invoke the LLM provider for one ReAct step (A5.3).
+
+        Emits the invocation diagnostic and delegates to
+        ``_generate_with_retry`` so transient provider/transport failures
+        (connection drops, timeouts, rate limits, HTTP 5xx) are retried with
+        bounded backoff. Returns the provider response unchanged, or ``None``
+        when all retries were exhausted by transient errors. Non-transient
+        provider errors propagate unchanged to the caller's ``except`` block.
+        """
+        print(f"[Agent] Calling LLM with {len(tools)} tools available...")
+        return self._generate_with_retry(messages, tools)
+
+    def _execute_tool_calls(
+        self, tool_calls: List[Any], react_step: int
+    ) -> Any:
+        """Execute the LLM's tool calls through the adapter (A5.5).
+
+        Extracted verbatim from ``handle_message``: defensive argument parsing,
+        transient retry with the mutation gate, structured timeout/error
+        detection, requested-vs-achieved arg tracking, and operation-registry
+        bookkeeping. Verification, state refresh and topology refresh remain in
+        ``handle_message`` (A5.6). Mutates ``self._operation_counter``,
+        ``self._operation_registry``, ``self._mutation_gate``,
+        ``self._last_failed_args``, ``self.router`` and ``self.design_state`` as
+        before. Returns the list of tool results aligned 1:1 with ``tool_calls``.
+        """
+        results = []
+
+        for tc in tool_calls:
+            name = tc.function.name
+            # Record this session's tool usage (attempted, even on failure).
+            self._session_tools_for_step.append(name)
+
+            # --- Defensively parse tool arguments (recoverable error) ---
+            try:
+                args = json.loads(tc.function.arguments)
+                if not isinstance(args, dict):
+                    args = {}
+            except (json.JSONDecodeError, TypeError) as e:
+                print(
+                    f"\033[91m[ERROR] Step {react_step}: Tool '{name}' malformed "
+                    f"arguments: {e}\033[0m")
+                malformed_result = json.dumps({
+                    "status": "error",
+                    "tool": name,
+                    "error_type": type(e).__name__,
+                    "error": f"Malformed tool arguments (invalid JSON): {e}",
+                    "arguments": {},
+                    "transient": False,
+                    "retries": 0,
+                }, default=str)
+                self._record_tool_outcome(
+                    name, {}, False,
+                    error=f"Malformed tool arguments (invalid JSON): {e}",
+                    out=None)
+                if self._capture_trace:
+                    self._trace.append({
+                        "step": react_step,
+                        "tool": name,
+                        "arguments": {},
+                        "result": None,
+                        "success": False,
+                        "error": f"Malformed tool arguments (invalid JSON): {e}",
+                        "attempt": 1,
+                    })
+                # Hand the structured error to the caller so it is appended to
+                # the caller's ``results`` (aligned 1:1 with tool_calls) and
+                # skipped by verification, exactly as before.
+                yield ("__malformed__", malformed_result)
+                continue
+
+            # Target object id for requested-vs-achieved tracking (BIP 4.3.2).
+            target = args.get("target_id") or args.get("target") or \
+                args.get("object") or args.get("object_name")
+
+            # BIP 4.3.7 / 5.5: Auto-inject the topology version AT WHICH the
+            # edge references were emitted (not the object's current version).
+            # The bridge compares this against the object's live topology; if
+            # the object changed since the references were captured, the
+            # comparison fails and the stale reference is rejected.
+            #
+            # BIP 5.5: using the recorded REFERENCE version (rather than the
+            # object's current version) is what makes a reused OLD edge_ref
+            # actually get rejected instead of being validated against the
+            # fresher object topology. If no reference version is recorded
+            # (the "0"/empty unknown sentinel), inject nothing so no stale
+            # reference is implicitly trusted.
+            if name in ("fillet", "chamfer") and args.get("target_id") is not None:
+                ref_version = self.design_state.get_recorded_reference_version(
+                    args["target_id"], "edge")
+                if ref_version not in (None, "", "0"):
+                    args["topology_version"] = ref_version
+                else:
+                    args.pop("topology_version", None)
+
+            print(
+                f"[Execution] Step {react_step}: Tool '{name}' with args: {args}")
+
+            # BIP 7.0: Generate unique operation ID for this execution attempt
+            self._operation_counter += 1
+            operation_id = f"op_{self._operation_counter}_{name}_{react_step}"
+
+            # Check if this is a mutation tool that requires serialization
+            mutation_tools = {"box", "cylinder", "boolean", "hole", "fillet", "chamfer",
+                              "shell", "edit_feature", "pattern_linear", "pattern_circular",
+                              "delete_feature", "mate", "sketch", "extrude"}
+            is_mutation = name in mutation_tools
+
+            # Create operation record in registry
+            self._operation_registry.create(
+                operation_id, name, dict(args), target, react_step)
+
+            # --- Execute with transient retry; retain non-transient errors ---
+            out = None
+            error = None
+            success = False
+            attempts = 0
+            transient = False
+            gate_acquired = False
+
+            for attempt in range(self.MAX_RETRIES + 1):
+                attempts = attempt + 1
+                try:
+                    # BIP 7.0: Acquire mutation gate for mutation tools
+                    if is_mutation and not gate_acquired:
+                        acquired, error_type = self._mutation_gate.acquire(
+                            operation_id)
+                        if not acquired:
+                            if error_type == "unresolved_operation":
+                                # Blocked by unresolved operation - return structured error
+                                # Get the unresolved operation ID for the error message
+                                unresolved_ops = self._operation_registry.get_unresolved()
+                                unresolved_id = next(
+                                    iter(unresolved_ops.keys())) if unresolved_ops else "unknown"
+                                error = RuntimeError(
+                                    f"Cannot execute '{name}': mutation operation {unresolved_id} is unresolved. "
+                                    f"Please wait for reconciliation or retry later.")
+                            elif error_type == "mutation_gate_timeout":
+                                # Physical lock timeout - return structured error
+                                error = RuntimeError(
+                                    f"Cannot execute '{name}': mutation gate timeout waiting for physical lock. "
+                                    f"Another mutation is currently executing.")
+                            else:
+                                error = RuntimeError(
+                                    f"Cannot execute '{name}': mutation gate acquisition failed.")
+                            error_type = error_type or "mutation_gate_error"
+                            transient = False
+                            success = False
+                            # Record trace for blocked mutation
+                            if self._capture_trace:
+                                self._trace.append({
+                                    "step": react_step,
+                                    "tool": name,
+                                    "arguments": args,
+                                    "result": str(error),
+                                    "success": False,
+                                    "error": str(error),
+                                    "attempt": attempts,
+                                    "transient": False,
+                                })
+                            break
+                        gate_acquired = True
+
+                    # Pass operation_id to adapter for tracking (adapter may ignore if not supported)
+                    out = self.adapter.execute_command(
+                        name, _operation_id=operation_id, **args)
+                    # BIP 6.8: Check if the returned result is a structured error (e.g., timeout).
+                    # Both FreeCAD timeout (BIP 6.6) and MCP timeout (BIP 6.7) return JSON
+                    # with error_type. This must NOT be treated as success.
+                    if isinstance(out, str):
+                        try:
+                            parsed = json.loads(out)
+                            if isinstance(parsed, dict) and parsed.get("success") is False:
+                                error = RuntimeError(parsed.get(
+                                    "error", "Tool execution failed"))
+                                # Detect timeout errors specifically
+                                error_type = parsed.get("error_type", "")
+                                if "timeout" in error_type.lower():
+                                    transient = True  # timeout is transient for retry purposes
+                                    # BIP 7.0: Mark operation as unresolved (timed out)
+                                    self._operation_registry.timeout(
+                                        operation_id, error_type, parsed.get("error", "Timeout"))
+                                else:
+                                    transient = self._is_transient_error(
+                                        error)
+                                success = False
+                                break
+                        except (json.JSONDecodeError, TypeError):
+                            # Not JSON or not a structured error - treat as success
+                            pass
+                    success = True
+                    break
+                except (ConnectionError, OSError) as e:
+                    error = e
+                    transient = True
+                    attempts = attempt + 1
+                    # Release mutation gate on retry
+                    if is_mutation and gate_acquired:
+                        self._mutation_gate.release(operation_id)
+                        gate_acquired = False
+                    if attempt < self.MAX_RETRIES:
+                        print(
+                            f"[Retry] Step {react_step}: Tool '{name}' attempt {attempt + 1} failed with transient error: {e}. Retrying...")
+                        continue
+                    # Exhausted transient retries -> recoverable failure.
+                    break
+                except RuntimeError as e:
+                    error = e
+                    transient = self._is_transient_error(e)
+                    attempts = attempt + 1
+                    # Release mutation gate on retry
+                    if is_mutation and gate_acquired and transient:
+                        self._mutation_gate.release(operation_id)
+                        gate_acquired = False
+                    if transient and attempt < self.MAX_RETRIES:
+                        print(
+                            f"[Retry] Step {react_step}: Tool '{name}' attempt {attempt + 1} failed with transient error: {e}. Retrying...")
+                        continue
+                    # Non-transient failure (or exhausted transient retries)
+                    # -> capture for the LLM, do NOT abort the turn.
+                    break
+
+            # BIP 4.3.2: Track requested-vs-achieved integrity.
+            # If a tool fails non-transiently, remember the requested args.
+            # If it succeeds on a subsequent attempt with different args,
+            # preserve both so the LLM can see the mismatch.
+            tool_key = (name, target)
+            requested_args_for_recording = None
+            if not success and not transient:
+                # Non-transient failure: store the requested args for this tool/target.
+                self._last_failed_args[tool_key] = dict(args)
+                # BIP 7.0: Mark operation as failed in registry
+                err_type = type(
+                    error).__name__ if error else "RuntimeError"
+                err_msg = str(error) if error else "Unknown error"
+                self._operation_registry.fail(
+                    operation_id, err_type, err_msg)
+                # Release mutation gate on failure
+                if is_mutation and gate_acquired:
+                    self._mutation_gate.release(operation_id)
+            elif success and tool_key in self._last_failed_args:
+                # Success after a prior non-transient failure on same tool/target.
+                # Check if achieved args differ from originally requested.
+                failed_args = self._last_failed_args.pop(tool_key)
+                if failed_args != args:
+                    requested_args_for_recording = failed_args
+
+            yield name, args, target, out, error, success, attempts, transient, \
+                operation_id, is_mutation, gate_acquired, \
+                requested_args_for_recording
+
+    def _evaluate_termination(
+        self,
+        response: Any,
+        step: int,
+        session_tools: List[Any],
+    ):
+        """Evaluate whether the ReAct loop should terminate, continue, or
+        proceed to tool execution (A5.4).
+
+        Extracted verbatim from ``handle_message``. Returns a tuple
+        ``(outcome, value)``:
+          - ``("return", payload)``  -> the caller must ``return payload``
+          - ``("continue", None)``   -> the caller must ``continue`` the loop
+          - ``("tools", None)``      -> the caller must proceed to tool execution
+
+        No new Enum/state machine is introduced: the plain-string outcome
+        mirrors the existing ``termination_reason`` string field.
+        """
+        # BIP 10.4: Per-turn total-token ceiling enforcement.
+        # If this LLM call caused the cumulative provider-reported total to
+        # reach/exceed the configured ceiling, stop further LLM reasoning
+        # for this turn immediately — do NOT begin another ReAct step.
+        # This is reported as a structured failure that is distinct from:
+        #   - MAX_STEPS exhaustion (different termination_reason/message)
+        #   - context-budget overflow (that trims context, never aborts)
+        #   - provider/API failure (different message/type)
+        #   - tool execution failure (different message/type)
+        if self._is_token_ceiling_reached():
+            self._token_telemetry["ceiling_reached"] = True
+            fail_msg = (
+                "Operation stopped: per-turn token ceiling "
+                f"({self.max_tokens_per_turn} tokens) reached after "
+                f"{self._token_telemetry['llm_calls']} LLM call(s) "
+                f"({self._token_telemetry['total_tokens']} tokens "
+                "consumed). Further reasoning for this turn was halted to "
+                "bound cost; the CAD state was not modified by this step."
+            )
+            print(f"\033[91m[ERROR] {fail_msg}\033[0m")
+            self.history.append({"role": "assistant", "content": fail_msg})
+            self.conversation.add_assistant(fail_msg)
+            if self._capture_trace:
+                self._trace.append({
+                    "step": step + 1,
+                    "type": "token_ceiling_reached",
+                    "message": fail_msg,
+                    "termination_reason": self.TOKEN_CEILING_TERMINATION_REASON,
+                    "token_telemetry": self._token_telemetry.copy(),
+                })
+            return ("return", (fail_msg, session_tools))
+
+        # 7. If LLM returns plain text (NO tool calls):
+        #    - meaningful content -> normal completion.
+        #    - empty/None content -> do NOT claim "Done."; keep going so the
+        #      LLM can produce a real response (bounded by MAX_STEPS).
+        if not getattr(response, "tool_calls", None):
+            raw_content = getattr(response, "content", None)
+            reply = raw_content.strip() if isinstance(
+                raw_content, str) else None
+            if reply:
+                # Safely encode for Windows console (cp1252).
+                safe_reply = reply.encode(
+                    'ascii', 'replace').decode('ascii')
+                print(
+                    f"[Agent] Finished reasoning (no tool calls). Final response: {safe_reply}")
+                # Append final response to long-term history
+                self.history.append(
+                    {"role": "assistant", "content": reply})
+                self.conversation.add_assistant(reply)
+                if self._capture_trace:
+                    self._trace.append({
+                        "step": step + 1,
+                        "type": "completion",
+                        "reply": reply,
+                        "termination_reason": "no_tool_calls",
+                        "token_telemetry": self._token_telemetry.copy(),
+                    })
+                return ("return", (reply, session_tools))
+            # Empty response: do not fabricate success. Continue the ReAct
+            # loop; if steps remain the LLM gets another chance.
+            print(
+                f"[Agent] WARNING: empty LLM response at step {step+1} "
+                "(no tool calls, no meaningful content). Continuing loop.")
+            if self._capture_trace:
+                self._trace.append({
+                    "step": step + 1,
+                    "type": "empty_response",
+                    "termination_reason": "empty_response_continue",
+                    "token_telemetry": self._token_telemetry.copy(),
+                })
+            return ("continue", None)
+
+        return ("tools", None)
+
+    def _verify_tool_outcome(
+        self,
+        name: Any,
+        args: Dict[str, Any],
+        operation_id: str,
+        is_mutation: bool,
+        gate_acquired: bool,
+        success: bool,
+        error: Any,
+        out: Any,
+    ):
+        """Post-tool mandatory verification (A5.6).
+
+        Extracted verbatim from ``handle_message``: BIP 8.1 volume-reduction
+        verification, BIP 8.2 face-count verification, BIP 8.3 bounding-box
+        verification, BIP 8.4 mate verification, and BIP 11.1 parameter
+        verification. A failed verification converts ``success`` to ``False``,
+        sets ``error``, marks the operation failed in the registry, and releases
+        the mutation gate — exactly as before. Returns the (possibly updated)
+        ``(success, error, operation_id, is_mutation, gate_acquired)``.
+        """
+        if success:
+            # BIP 8.x: Mandatory post-mutation verification runs BEFORE the result
+            # is visible to the LLM. This prevents the LLM from terminating early
+            # before mandatory verification completes.
+
+            # BIP 8.1: Operation-specific geometry verification
+            # Verify volume reduction for boolean subtract and hole operations
+            if name == "boolean" and args.get("mode") == "subtract":
+                # Verify that boolean subtract actually removed material
+                base_id = args.get("target_id")
+                result_id = args.get("id")
+                if base_id and result_id:
+                    try:
+                        # Get mass properties of the base object (need to query before state changes)
+                        # Since the base object is now hidden, we need to get it from the result
+                        # The result object (Part::Cut) should have the reduced volume
+                        base_mass = self.adapter.execute_command(
+                            "get_mass_properties", object_name=base_id)
+                        result_mass = self.adapter.execute_command(
+                            "get_mass_properties", object_name=result_id)
+                        ok, reason = GeometryVerifier.verify_volume_reduction(
+                            base_mass, result_mass)
+                        if not ok:
+                            error_msg = f"Verification failed: {reason}"
+                            print(
+                                f"\033[91m[VERIFY] {error_msg}\033[0m")
+                            # Convert success to failure for the agent recovery loop
+                            success = False
+                            error = RuntimeError(error_msg)
+                            # Mark operation as failed
+                            self._operation_registry.fail(
+                                operation_id, "GeometryVerificationError", error_msg)
+                            # Release mutation gate since we're treating this as failure
+                            if is_mutation and gate_acquired:
+                                self._mutation_gate.release(
+                                    operation_id)
+                    except Exception as e:
+                        # Verification error - treat as verification failure
+                        error_msg = f"Verification exception: {e}"
+                        print(
+                            f"\033[91m[VERIFY] {error_msg}\033[0m")
+                        success = False
+                        error = RuntimeError(error_msg)
+                        # Mark operation as failed
+                        self._operation_registry.fail(
+                            operation_id, "GeometryVerificationError", error_msg)
+                        # Release mutation gate
+                        if is_mutation and gate_acquired:
+                            self._mutation_gate.release(
+                                operation_id)
+
+            elif name == "hole":
+                # Verify that hole operation actually removed material
+                target_id = args.get("target_id")
+                result_id = args.get("id")
+                if target_id and result_id:
+                    try:
+                        target_mass = self.adapter.execute_command(
+                            "get_mass_properties", object_name=target_id)
+                        result_mass = self.adapter.execute_command(
+                            "get_mass_properties", object_name=result_id)
+                        ok, reason = GeometryVerifier.verify_volume_reduction(
+                            target_mass, result_mass)
+                        if not ok:
+                            error_msg = f"Verification failed: {reason}"
+                            print(
+                                f"\033[91m[VERIFY] {error_msg}\033[0m")
+                            # Convert success to failure for the agent recovery loop
+                            success = False
+                            error = RuntimeError(error_msg)
+                            # Mark operation as failed
+                            self._operation_registry.fail(
+                                operation_id, "GeometryVerificationError", error_msg)
+                            # Release mutation gate since we're treating this as failure
+                            if is_mutation and gate_acquired:
+                                self._mutation_gate.release(
+                                    operation_id)
+                    except Exception as e:
+                        # Verification error - treat as verification failure
+                        error_msg = f"Verification exception: {e}"
+                        print(
+                            f"\033[91m[VERIFY] {error_msg}\033[0m")
+                        success = False
+                        error = RuntimeError(error_msg)
+                        # Mark operation as failed
+                        self._operation_registry.fail(
+                            operation_id, "GeometryVerificationError", error_msg)
+                        # Release mutation gate
+                        if is_mutation and gate_acquired:
+                            self._mutation_gate.release(
+                                operation_id)
+
+            # BIP 8.2: Operation-specific face-count verification
+            # Verify face count increase for fillet, chamfer, and pattern operations
+            elif name in ("fillet", "chamfer", "pattern_linear", "pattern_circular"):
+                target_id = args.get("target_id")
+                result_id = args.get("id")
+                if target_id and result_id:
+                    try:
+                        # Get face count before and after operation
+                        # Note: we need the base object's faces. The target_id may be the base object
+                        # or the result object depending on the operation.
+                        # get_faces returns {"faces": [...], "topology_version": "..."}
+                        # We need to extract the faces array for verification.
+                        base_faces_raw = self.adapter.execute_command(
+                            "get_faces", object_name=target_id)
+                        result_faces_raw = self.adapter.execute_command(
+                            "get_faces", object_name=result_id)
+                        # Parse and extract faces array
+                        try:
+                            base_faces_parsed = json.loads(
+                                base_faces_raw)
+                            base_faces = json.dumps(base_faces_parsed.get("faces", []) if isinstance(
+                                base_faces_parsed, dict) else base_faces_parsed)
+                        except (json.JSONDecodeError, TypeError):
+                            base_faces = "[]"
+                        try:
+                            result_faces_parsed = json.loads(
+                                result_faces_raw)
+                            result_faces = json.dumps(result_faces_parsed.get("faces", []) if isinstance(
+                                result_faces_parsed, dict) else result_faces_parsed)
+                        except (json.JSONDecodeError, TypeError):
+                            result_faces = "[]"
+                        ok, reason = GeometryVerifier.verify_face_count_increase(
+                            base_faces, result_faces)
+                        if not ok:
+                            error_msg = f"Verification failed: {reason}"
+                            print(
+                                f"\033[91m[VERIFY] {error_msg}\033[0m")
+                            # Convert success to failure for the agent recovery loop
+                            success = False
+                            error = RuntimeError(error_msg)
+                            # Mark operation as failed
+                            self._operation_registry.fail(
+                                operation_id, "GeometryVerificationError", error_msg)
+                            # Release mutation gate since we're treating this as failure
+                            if is_mutation and gate_acquired:
+                                self._mutation_gate.release(
+                                    operation_id)
+                    except Exception as e:
+                        # Verification error - treat as verification failure
+                        error_msg = f"Verification exception: {e}"
+                        print(
+                            f"\033[91m[VERIFY] {error_msg}\033[0m")
+                        success = False
+                        error = RuntimeError(error_msg)
+                        # Mark operation as failed
+                        self._operation_registry.fail(
+                            operation_id, "GeometryVerificationError", error_msg)
+                        # Release mutation gate
+                        if is_mutation and gate_acquired:
+                            self._mutation_gate.release(
+                                operation_id)
+
+            # BIP 8.3: Bounding-box verification
+            # Verify geometry stays within explicit user-specified bounds
+            if self._bbox_constraints and success:
+                result_id = args.get("id")
+                if result_id:
+                    try:
+                        mass_json = self.adapter.execute_command(
+                            "get_mass_properties", object_name=result_id)
+                        ok = GeometryVerifier.verify_within_bounding_box(
+                            mass_json,
+                            self._bbox_constraints.get(
+                                "max_x", float('inf')),
+                            self._bbox_constraints.get(
+                                "max_y", float('inf')),
+                            self._bbox_constraints.get(
+                                "max_z", float('inf'))
+                        )
+                        if not ok:
+                            error_msg = (
+                                f"Verification failed: Geometry exceeds bounding-box constraints "
+                                f"X={self._bbox_constraints.get('max_x')}mm "
+                                f"Y={self._bbox_constraints.get('max_y')}mm "
+                                f"Z={self._bbox_constraints.get('max_z')}mm"
+                            )
+                            print(
+                                f"\033[91m[VERIFY] {error_msg}\033[0m")
+                            # Convert success to failure for the agent recovery loop
+                            success = False
+                            error = RuntimeError(error_msg)
+                            # Mark operation as failed
+                            self._operation_registry.fail(
+                                operation_id, "GeometryVerificationError", error_msg)
+                            # Release mutation gate since we're treating this as failure
+                            if is_mutation and gate_acquired:
+                                self._mutation_gate.release(
+                                    operation_id)
+                    except Exception as e:
+                        # Verification error - treat as verification failure
+                        error_msg = f"Verification exception: {e}"
+                        print(
+                            f"\033[91m[VERIFY] {error_msg}\033[0m")
+                        success = False
+                        error = RuntimeError(error_msg)
+                        # Mark operation as failed
+                        self._operation_registry.fail(
+                            operation_id, "GeometryVerificationError", error_msg)
+                        # Release mutation gate
+                        if is_mutation and gate_acquired:
+                            self._mutation_gate.release(
+                                operation_id)
+
+            # BIP 8.4: Mate verification.
+            # Verify the geometric relationship produced by mate
+            # operations. The verifier must receive the SPECIFIC
+            # referenced face/edge dicts, not the raw get_faces/get_edges
+            # wrapper payload ({"faces": [...], "topology_version": ...}).
+            if name == "mate" and success:
+                mate_type = args.get("mate_type", "").strip().lower()
+                moving_target = args.get("moving_target")
+                moving_ref = args.get("moving_ref")
+                fixed_target = args.get("fixed_target")
+                fixed_ref = args.get("fixed_ref")
+
+                def _pick_ref(wrapper_raw, refs_key, ref_id_key, ref_id):
+                    """Extract one referenced face/edge dict from a
+                    get_faces/get_edges wrapper payload. Returns None
+                    when the specific reference cannot be resolved."""
+                    try:
+                        parsed = json.loads(wrapper_raw) if isinstance(
+                            wrapper_raw, str) else wrapper_raw
+                    except (json.JSONDecodeError, TypeError):
+                        return None
+                    entries = None
+                    if isinstance(parsed, dict) and isinstance(
+                            parsed.get(refs_key), list):
+                        entries = parsed[refs_key]
+                    elif isinstance(parsed, list):
+                        entries = parsed
+                    elif isinstance(parsed, dict) and ref_id_key in parsed:
+                        return parsed  # already a single ref dict
+                    if not entries:
+                        return None
+                    ref_s = str(ref_id)
+                    for e in entries:
+                        if isinstance(e, dict) and str(
+                                e.get(ref_id_key)) == ref_s:
+                            return e
+                    return None
+
+                if moving_target and moving_ref and fixed_target and fixed_ref:
+                    try:
+                        if mate_type == "coincident":
+                            # Get face data for both mated faces
+                            moving_face_raw = self.adapter.execute_command(
+                                "get_faces", object_name=moving_target)
+                            fixed_face_raw = self.adapter.execute_command(
+                                "get_faces", object_name=fixed_target)
+                            m = _pick_ref(moving_face_raw, "faces",
+                                          "face_id", moving_ref)
+                            f = _pick_ref(fixed_face_raw, "faces",
+                                          "face_id", fixed_ref)
+                            if m is None or f is None:
+                                ok, reason = False, (
+                                    f"mated face reference not found in "
+                                    f"topology (moving={moving_ref!r}, "
+                                    f"fixed={fixed_ref!r})")
+                            else:
+                                ok, reason = GeometryVerifier.verify_mate_coincident(
+                                    json.dumps(m), json.dumps(f))
+                        elif mate_type == "concentric":
+                            # Get edge data for both mated edges
+                            moving_edge_raw = self.adapter.execute_command(
+                                "get_edges", object_name=moving_target)
+                            fixed_edge_raw = self.adapter.execute_command(
+                                "get_edges", object_name=fixed_target)
+                            m = _pick_ref(moving_edge_raw, "edges",
+                                          "edge_id", moving_ref)
+                            f = _pick_ref(fixed_edge_raw, "edges",
+                                          "edge_id", fixed_ref)
+                            if m is None or f is None:
+                                ok, reason = False, (
+                                    f"mated edge reference not found in "
+                                    f"topology (moving={moving_ref!r}, "
+                                    f"fixed={fixed_ref!r})")
+                            else:
+                                ok, reason = GeometryVerifier.verify_mate_concentric(
+                                    json.dumps(m), json.dumps(f))
+                        else:
+                            ok, reason = True, f"mate type '{mate_type}' not verified (unsupported)"
+
+                        if not ok:
+                            error_msg = f"Verification failed: {reason}"
+                            print(
+                                f"\033[91m[VERIFY] {error_msg}\033[0m")
+                            # Convert success to failure for the agent recovery loop
+                            success = False
+                            error = RuntimeError(error_msg)
+                            # Mark operation as failed
+                            self._operation_registry.fail(
+                                operation_id, "GeometryVerificationError", error_msg)
+                            # Release mutation gate since we're treating this as failure
+                            if is_mutation and gate_acquired:
+                                self._mutation_gate.release(
+                                    operation_id)
+                    except Exception as e:
+                        # Verification error - treat as verification failure
+                        error_msg = f"Verification exception: {e}"
+                        print(
+                            f"\033[91m[VERIFY] {error_msg}\033[0m")
+                        success = False
+                        error = RuntimeError(error_msg)
+                        # Mark operation as failed
+                        self._operation_registry.fail(
+                            operation_id, "GeometryVerificationError", error_msg)
+                        # Release mutation gate
+                        if is_mutation and gate_acquired:
+                            self._mutation_gate.release(
+                                operation_id)
+
+            # BIP 11.1: Parameter-level verification
+            # Verify that requested parameters match actual CAD result.
+            # This runs after geometric verification passes.
+            if success and name in ("box", "cylinder", "hole", "fillet", "chamfer",
+                                    "pattern_linear", "pattern_circular", "boolean"):
+                try:
+                    param_ok, param_reason = ParameterVerifier.verify_operation(
+                        tool=name, args=args, adapter=self.adapter,
+                        result_id=args.get("id"), target_id=args.get("target_id"))
+                    if param_ok == VerificationResult.FAIL:
+                        error_msg = f"Parameter verification failed: {param_reason}"
+                        print(f"\033[91m[VERIFY] {error_msg}\033[0m")
+                        success = False
+                        error = RuntimeError(error_msg)
+                        self._operation_registry.fail(
+                            operation_id, "ParameterVerificationError", error_msg)
+                        if is_mutation and gate_acquired:
+                            self._mutation_gate.release(operation_id)
+                    elif param_ok == VerificationResult.UNKNOWN:
+                        print(
+                            f"[VERIFY] Parameter verification UNKNOWN: {param_reason}")
+                except Exception as e:
+                    # Verification error - treat as verification failure
+                    error_msg = f"Verification exception: {e}"
+                    print(
+                        f"\033[91m[VERIFY] {error_msg}\033[0m")
+                    success = False
+                    error = RuntimeError(error_msg)
+                    self._operation_registry.fail(
+                        operation_id, "ParameterVerificationError", error_msg)
+                    if is_mutation and gate_acquired:
+                        self._mutation_gate.release(operation_id)
+
+        return (success, error, operation_id, is_mutation, gate_acquired)
+
+    def _refresh_state_and_verify_geometry(
+        self, response: Any, step: int, scratchpad: List[Any]
+    ):
+        """Post-step state refresh + geometry validation (A5.6).
+
+        Extracted verbatim from ``handle_message``: BIP 4.3.2 / 6.9 get_state()
+        refresh, DesignState sync, BIP 7.0 pending-operation reconciliation,
+        operation-registry cleanup, ``check_geometry`` validation, and the
+        structured uncertainty/geometry warnings injected into the scratchpad.
+        ``scratchpad`` must be a reference to the caller's list (mutated in
+        place). Returns ``(response, step)`` unchanged for caller convenience.
+        """
+        # 10a. Runtime geometry verification + IMMEDIATE STATE SYNC (BIP 4.3.2):
+        # After EVERY successful tool execution, refresh DesignState from the
+        # live CAD state BEFORE the next ReAct iteration. This ensures the
+        # compiled context for the next step reflects the actual CAD state.
+
+        # BIP 6.9: Also refresh state after a timeout to detect late completion
+        # of the underlying operation. This provides safe reconciliation.
+        needs_state_refresh = True
+        # Only skip if all operations in this step were query-only (get_state, get_edges, etc.)
+        mutation_tools = {"box", "cylinder", "boolean", "hole", "fillet", "chamfer",
+                          "shell", "edit_feature", "pattern_linear", "pattern_circular",
+                          "delete_feature", "mate", "sketch", "extrude"}
+        if all(tc.function.name not in mutation_tools for tc in response.tool_calls):
+            needs_state_refresh = False
+
+        state_retrieval_failed = False
+        if needs_state_refresh:
+            try:
+                # A4.3: If we already got state from combined endpoint in topology refresh,
+                # we may have already updated DesignState. But we still need to call
+                # get_state() here for late completion reconciliation and registry cleanup.
+                new_state_json = self.adapter.get_state()
+                new_state = json.loads(new_state_json)
+                # Immediately synchronize DesignState with the live CAD state.
+                self._update_design_state(new_state_json)
+                # BIP 7.0: Check if any unresolved operation's target now exists (late completion)
+                self._check_pending_operations_against_state(new_state)
+                # Periodic cleanup of old reconciled operations
+                self._operation_registry.cleanup_reconciled(max_age=300.0)
+            except Exception as e:
+                print(
+                    f"[Agent] Warning: Failed to get state for verification/sync: {e}")
+                # Mark state as unavailable but preserve last known-good objects.
+                self.design_state.mark_state_unavailable()
+                state_retrieval_failed = True
+                new_state = []
+        else:
+            new_state = []
+
+        errors = check_geometry(new_state)
+
+        # If state retrieval failed, inject a structured uncertainty notice.
+        # Do NOT treat unavailable verification as valid.
+        if state_retrieval_failed:
+            uncertainty_warning = (
+                "WARNING: Geometry verification unavailable after last operation "
+                "(CAD state retrieval failed). The authoritative CAD state could "
+                "not be queried. You must verify the result manually or retry."
+            )
+            print(f"\033[93m[VERIFY] {uncertainty_warning}\033[0m")
+            scratchpad.append({
+                "role": "system",
+                "content": uncertainty_warning,
+            })
+            if self._capture_trace:
+                self._trace.append({
+                    "step": step + 1,
+                    "type": "geometry_verification_unavailable",
+                    "reason": "state_retrieval_failed",
+                })
+
+        if errors:
+            warning = (
+                "WARNING: Geometry validation failed after last operation: "
+                f"{errors}. You must use edit_feature or delete_feature to "
+                "fix this before proceeding."
+            )
+            print(f"\033[93m[VERIFY] {warning}\033[0m")
+            # Inject the warning as context for the LLM's next reasoning step.
+            scratchpad.append({
+                "role": "system",
+                "content": warning,
+            })
+            if self._capture_trace:
+                self._trace.append({
+                    "step": step + 1,
+                    "type": "geometry_warning",
+                    "errors": errors,
+                })
 
     # ------------------------------------------------------------------ #
     # Context Engine integration (BIP 4.2)
@@ -667,6 +1497,33 @@ class CADAgent:
         """
         return list(self._context_telemetry)
 
+    def _compile_context(
+        self,
+        user_message: str,
+        available_tools: List[Dict[str, Any]],
+        react_step: int,
+        optional_context_plan: Optional[ContextPlan] = None,
+        tool_selection_plan: Optional[ToolSelectionPlan] = None,
+    ) -> CompiledContext:
+        """Compile the SELECTIVE LLM context for a single ReAct reasoning step (BIP 4.2).
+
+        - relevant CAD objects (no blind state dump)
+        - relevant memory (no blind memory dump)
+        - relevant conversation history (no blind history dump)
+        - plan-required + routed tools (new capability-based ToolRouter)
+        """
+        return self.compiler.compile(
+            user_message=user_message,
+            conversation_context=self.conversation,
+            design_state=self.design_state,
+            session_memory=self.session_memory,
+            available_tools=available_tools,
+            react_step=react_step,
+            system_prefix=SYSTEM_PROMPT + "\n\n" + REACT_LOOP_INJECTION,
+            optional_context_plan=optional_context_plan,
+            tool_selection_plan=tool_selection_plan,
+        )
+
     def handle_message(self, user_message: str):
         """Process a user message using a ReAct scratchpad pattern.
 
@@ -806,30 +1663,17 @@ class CADAgent:
             # 3. INTENT CLASSIFICATION: classify user intent once per turn (first step)
             #    and reuse the plan for all ReAct steps in this turn.
             if step == 0:
-                intent_result = self.intent_classifier.classify(user_message)
-                intent_plan = self.intent_classifier.to_context_plan(
-                    intent_result, user_message)
-                intent_tool_plan = intent_result.tool_selection_plan
-                print(f"[Agent] Intent classified: {intent_result.primary_intent} "
-                      f"(confidence={intent_result.confidence:.2f}, "
-                      f"tools={len(intent_result.required_tools)})")
+                intent_plan, intent_tool_plan = self._classify_intent(
+                    user_message)
             else:
                 intent_plan = None
                 intent_tool_plan = None
 
             # 3. Compile a SELECTIVE context via the ContextEngine (BIP 4.2).
-            #     - relevant CAD objects (no blind state dump)
-            #     - relevant memory (no blind memory dump)
-            #     - relevant conversation history (no blind history dump)
-            #     - plan-required + routed tools (new capability-based ToolRouter)
-            compiled = self.compiler.compile(
+            compiled = self._compile_context(
                 user_message=user_message,
-                conversation_context=self.conversation,
-                design_state=self.design_state,
-                session_memory=self.session_memory,
                 available_tools=all_tools,
                 react_step=step + 1,
-                system_prefix=SYSTEM_PROMPT + "\n\n" + REACT_LOOP_INJECTION,
                 optional_context_plan=intent_plan,
                 tool_selection_plan=intent_tool_plan,
             )
@@ -892,9 +1736,8 @@ class CADAgent:
             #    backoff inside _generate_with_retry. If retries are exhausted,
             #    the turn degrades gracefully (structured completion) instead of
             #    letting the provider exception crash the whole turn.
-            print(f"[Agent] Calling LLM with {len(tools)} tools available...")
             try:
-                response = self._generate_with_retry(messages, tools)
+                response = self._invoke_llm(messages, tools)
             except Exception as e:
                 # Non-transient provider error (e.g. bad request/auth): never
                 # silently reinterpreted as success.
@@ -991,77 +1834,14 @@ class CADAgent:
                         "total_tokens")
                 self._context_telemetry.append(compiled.telemetry.to_dict())
 
-            # BIP 10.4: Per-turn total-token ceiling enforcement.
-            # If this LLM call caused the cumulative provider-reported total to
-            # reach/exceed the configured ceiling, stop further LLM reasoning
-            # for this turn immediately — do NOT begin another ReAct step.
-            # This is reported as a structured failure that is distinct from:
-            #   - MAX_STEPS exhaustion (different termination_reason/message)
-            #   - context-budget overflow (that trims context, never aborts)
-            #   - provider/API failure (different message/type)
-            #   - tool execution failure (different message/type)
-            if self._is_token_ceiling_reached():
-                self._token_telemetry["ceiling_reached"] = True
-                fail_msg = (
-                    "Operation stopped: per-turn token ceiling "
-                    f"({self.max_tokens_per_turn} tokens) reached after "
-                    f"{self._token_telemetry['llm_calls']} LLM call(s) "
-                    f"({self._token_telemetry['total_tokens']} tokens "
-                    "consumed). Further reasoning for this turn was halted to "
-                    "bound cost; the CAD state was not modified by this step."
-                )
-                print(f"\033[91m[ERROR] {fail_msg}\033[0m")
-                self.history.append({"role": "assistant", "content": fail_msg})
-                self.conversation.add_assistant(fail_msg)
-                if self._capture_trace:
-                    self._trace.append({
-                        "step": step + 1,
-                        "type": "token_ceiling_reached",
-                        "message": fail_msg,
-                        "termination_reason": self.TOKEN_CEILING_TERMINATION_REASON,
-                        "token_telemetry": self._token_telemetry.copy(),
-                    })
-                return fail_msg, session_tools
-
-            # 7. If LLM returns plain text (NO tool calls):
-            #    - meaningful content -> normal completion.
-            #    - empty/None content -> do NOT claim "Done."; keep going so the
-            #      LLM can produce a real response (bounded by MAX_STEPS).
-            if not getattr(response, "tool_calls", None):
-                raw_content = getattr(response, "content", None)
-                reply = raw_content.strip() if isinstance(
-                    raw_content, str) else None
-                if reply:
-                    # Safely encode for Windows console (cp1252).
-                    safe_reply = reply.encode(
-                        'ascii', 'replace').decode('ascii')
-                    print(
-                        f"[Agent] Finished reasoning (no tool calls). Final response: {safe_reply}")
-                    # Append final response to long-term history
-                    self.history.append(
-                        {"role": "assistant", "content": reply})
-                    self.conversation.add_assistant(reply)
-                    if self._capture_trace:
-                        self._trace.append({
-                            "step": step + 1,
-                            "type": "completion",
-                            "reply": reply,
-                            "termination_reason": "no_tool_calls",
-                            "token_telemetry": self._token_telemetry.copy(),
-                        })
-                    return reply, session_tools
-                # Empty response: do not fabricate success. Continue the ReAct
-                # loop; if steps remain the LLM gets another chance.
-                print(
-                    f"[Agent] WARNING: empty LLM response at step {step+1} "
-                    "(no tool calls, no meaningful content). Continuing loop.")
-                if self._capture_trace:
-                    self._trace.append({
-                        "step": step + 1,
-                        "type": "empty_response",
-                        "termination_reason": "empty_response_continue",
-                        "token_telemetry": self._token_telemetry.copy(),
-                    })
+            # BIP 10.4 / step 7: Termination/done-state evaluation (A5.4).
+            # Covers token-ceiling termination, normal completion, empty-response
+            # continuation, and the fall-through to tool execution.
+            term_outcome, term_value = self._evaluate_termination(
+                response, step, session_tools)
+            if term_outcome == "return":
+                return term_value
+            if term_outcome == "continue":
                 continue
 
             # 8. LLM returned tool calls - append assistant message to scratchpad
@@ -1080,578 +1860,42 @@ class CADAgent:
             #      returned to the LLM so it can reason about recovery.
             results = []
 
-            for tc in response.tool_calls:
-                name = tc.function.name
-                # Record this session's tool usage (attempted, even on failure).
-                session_tools.append(name)
-
-                # --- Defensively parse tool arguments (recoverable error) ---
-                try:
-                    args = json.loads(tc.function.arguments)
-                    if not isinstance(args, dict):
-                        args = {}
-                except (json.JSONDecodeError, TypeError) as e:
-                    print(
-                        f"\033[91m[ERROR] Step {step+1}: Tool '{name}' malformed "
-                        f"arguments: {e}\033[0m")
-                    results.append(json.dumps({
-                        "status": "error",
-                        "tool": name,
-                        "error_type": type(e).__name__,
-                        "error": f"Malformed tool arguments (invalid JSON): {e}",
-                        "arguments": {},
-                        "transient": False,
-                        "retries": 0,
-                    }, default=str))
-                    self._record_tool_outcome(
-                        name, {}, False,
-                        error=f"Malformed tool arguments (invalid JSON): {e}",
-                        out=None)
-                    if self._capture_trace:
-                        self._trace.append({
-                            "step": step + 1,
-                            "tool": name,
-                            "arguments": {},
-                            "result": None,
-                            "success": False,
-                            "error": f"Malformed tool arguments (invalid JSON): {e}",
-                            "attempt": 1,
-                        })
+            # A5.5: drive the extracted tool-execution generator. The generator
+            # yields one tuple per tool call; the verification, state-refresh and
+            # topology-refresh blocks below remain inline (A5.6) and re-bind the
+            # same local variable names to preserve behaviour exactly.
+            self._session_tools_for_step = session_tools
+            for _payload in self._execute_tool_calls(
+                    response.tool_calls, step + 1):
+                # Malformed tool arguments: the generator yields the structured
+                # error under a sentinel; append it to ``results`` (aligned 1:1
+                # with tool_calls) and skip verification for this call.
+                if len(_payload) == 2 and _payload[0] == "__malformed__":
+                    results.append(_payload[1])
                     continue
+                (name, args, target, out, error, success, attempts, transient,
+                 operation_id, is_mutation, gate_acquired,
+                 requested_args_for_recording) = _payload
 
-                # Target object id for requested-vs-achieved tracking (BIP 4.3.2).
-                target = args.get("target_id") or args.get("target") or \
-                    args.get("object") or args.get("object_name")
+                # A5.6: mandatory post-tool verification (BIP 8.1/8.2/8.3/8.4/11.1).
+                # A failed verification converts success to False and records the
+                # failure, preserving the pre-existing recovery semantics.
+                (success, error, operation_id, is_mutation,
+                 gate_acquired) = self._verify_tool_outcome(
+                    name, args, operation_id, is_mutation, gate_acquired,
+                    success, error, out)
 
-                # BIP 4.3.7 / 5.5: Auto-inject the topology version AT WHICH the
-                # edge references were emitted (not the object's current version).
-                # The bridge compares this against the object's live topology; if
-                # the object changed since the references were captured, the
-                # comparison fails and the stale reference is rejected.
-                #
-                # BIP 5.5: using the recorded REFERENCE version (rather than the
-                # object's current version) is what makes a reused OLD edge_ref
-                # actually get rejected instead of being validated against the
-                # fresher object topology. If no reference version is recorded
-                # (the "0"/empty unknown sentinel), inject nothing so no stale
-                # reference is implicitly trusted.
-                if name in ("fillet", "chamfer") and args.get("target_id") is not None:
-                    ref_version = self.design_state.get_recorded_reference_version(
-                        args["target_id"], "edge")
-                    if ref_version not in (None, "", "0"):
-                        args["topology_version"] = ref_version
-                    else:
-                        args.pop("topology_version", None)
-
-                print(
-                    f"[Execution] Step {step+1}: Tool '{name}' with args: {args}")
-
-                # BIP 7.0: Generate unique operation ID for this execution attempt
-                self._operation_counter += 1
-                operation_id = f"op_{self._operation_counter}_{name}_{step+1}"
-
-                # Check if this is a mutation tool that requires serialization
-                mutation_tools = {"box", "cylinder", "boolean", "hole", "fillet", "chamfer",
-                                  "shell", "edit_feature", "pattern_linear", "pattern_circular",
-                                  "delete_feature", "mate", "sketch", "extrude"}
-                is_mutation = name in mutation_tools
-
-                # Create operation record in registry
-                self._operation_registry.create(
-                    operation_id, name, dict(args), target, step + 1)
-
-                # --- Execute with transient retry; retain non-transient errors ---
-                out = None
-                error = None
-                success = False
-                attempts = 0
-                transient = False
-                gate_acquired = False
-
-                for attempt in range(self.MAX_RETRIES + 1):
-                    attempts = attempt + 1
-                    try:
-                        # BIP 7.0: Acquire mutation gate for mutation tools
-                        if is_mutation and not gate_acquired:
-                            acquired, error_type = self._mutation_gate.acquire(
-                                operation_id)
-                            if not acquired:
-                                if error_type == "unresolved_operation":
-                                    # Blocked by unresolved operation - return structured error
-                                    # Get the unresolved operation ID for the error message
-                                    unresolved_ops = self._operation_registry.get_unresolved()
-                                    unresolved_id = next(
-                                        iter(unresolved_ops.keys())) if unresolved_ops else "unknown"
-                                    error = RuntimeError(
-                                        f"Cannot execute '{name}': mutation operation {unresolved_id} is unresolved. "
-                                        f"Please wait for reconciliation or retry later.")
-                                elif error_type == "mutation_gate_timeout":
-                                    # Physical lock timeout - return structured error
-                                    error = RuntimeError(
-                                        f"Cannot execute '{name}': mutation gate timeout waiting for physical lock. "
-                                        f"Another mutation is currently executing.")
-                                else:
-                                    error = RuntimeError(
-                                        f"Cannot execute '{name}': mutation gate acquisition failed.")
-                                error_type = error_type or "mutation_gate_error"
-                                transient = False
-                                success = False
-                                # Record trace for blocked mutation
-                                if self._capture_trace:
-                                    self._trace.append({
-                                        "step": step + 1,
-                                        "tool": name,
-                                        "arguments": args,
-                                        "result": str(error),
-                                        "success": False,
-                                        "error": str(error),
-                                        "attempt": attempts,
-                                        "transient": False,
-                                    })
-                                break
-                            gate_acquired = True
-
-                        # Pass operation_id to adapter for tracking (adapter may ignore if not supported)
-                        out = self.adapter.execute_command(
-                            name, _operation_id=operation_id, **args)
-                        # BIP 6.8: Check if the returned result is a structured error (e.g., timeout).
-                        # Both FreeCAD timeout (BIP 6.6) and MCP timeout (BIP 6.7) return JSON
-                        # with error_type. This must NOT be treated as success.
-                        if isinstance(out, str):
-                            try:
-                                parsed = json.loads(out)
-                                if isinstance(parsed, dict) and parsed.get("success") is False:
-                                    error = RuntimeError(parsed.get(
-                                        "error", "Tool execution failed"))
-                                    # Detect timeout errors specifically
-                                    error_type = parsed.get("error_type", "")
-                                    if "timeout" in error_type.lower():
-                                        transient = True  # timeout is transient for retry purposes
-                                        # BIP 7.0: Mark operation as unresolved (timed out)
-                                        self._operation_registry.timeout(
-                                            operation_id, error_type, parsed.get("error", "Timeout"))
-                                    else:
-                                        transient = self._is_transient_error(
-                                            error)
-                                    success = False
-                                    break
-                            except (json.JSONDecodeError, TypeError):
-                                # Not JSON or not a structured error - treat as success
-                                pass
-                        success = True
-                        break
-                    except (ConnectionError, OSError) as e:
-                        error = e
-                        transient = True
-                        attempts = attempt + 1
-                        # Release mutation gate on retry
-                        if is_mutation and gate_acquired:
-                            self._mutation_gate.release(operation_id)
-                            gate_acquired = False
-                        if attempt < self.MAX_RETRIES:
-                            print(
-                                f"[Retry] Step {step+1}: Tool '{name}' attempt {attempt + 1} failed with transient error: {e}. Retrying...")
-                            continue
-                        # Exhausted transient retries -> recoverable failure.
-                        break
-                    except RuntimeError as e:
-                        error = e
-                        transient = self._is_transient_error(e)
-                        attempts = attempt + 1
-                        # Release mutation gate on retry
-                        if is_mutation and gate_acquired and transient:
-                            self._mutation_gate.release(operation_id)
-                            gate_acquired = False
-                        if transient and attempt < self.MAX_RETRIES:
-                            print(
-                                f"[Retry] Step {step+1}: Tool '{name}' attempt {attempt + 1} failed with transient error: {e}. Retrying...")
-                            continue
-                        # Non-transient failure (or exhausted transient retries)
-                        # -> capture for the LLM, do NOT abort the turn.
-                        break
-
-                # BIP 4.3.2: Track requested-vs-achieved integrity.
-                # If a tool fails non-transiently, remember the requested args.
-                # If it succeeds on a subsequent attempt with different args,
-                # preserve both so the LLM can see the mismatch.
-                tool_key = (name, target)
-                requested_args_for_recording = None
-                if not success and not transient:
-                    # Non-transient failure: store the requested args for this tool/target.
-                    self._last_failed_args[tool_key] = dict(args)
-                    # BIP 7.0: Mark operation as failed in registry
-                    err_type = type(
-                        error).__name__ if error else "RuntimeError"
-                    err_msg = str(error) if error else "Unknown error"
-                    self._operation_registry.fail(
-                        operation_id, err_type, err_msg)
-                    # Release mutation gate on failure
+                # Only append result to results after ALL verifications pass
+                if success:
+                    results.append(out)
+                    print(
+                        f"[Execution] Step {step+1}: Tool '{name}' succeeded: {out}")
+                    error_msg = None
+                    # BIP 7.0: Mark operation as succeeded in registry
+                    self._operation_registry.succeed(operation_id)
+                    # Release mutation gate on success
                     if is_mutation and gate_acquired:
                         self._mutation_gate.release(operation_id)
-                elif success and tool_key in self._last_failed_args:
-                    # Success after a prior non-transient failure on same tool/target.
-                    # Check if achieved args differ from originally requested.
-                    failed_args = self._last_failed_args.pop(tool_key)
-                    if failed_args != args:
-                        requested_args_for_recording = failed_args
-
-                if success:
-                    # BIP 8.x: Mandatory post-mutation verification runs BEFORE the result
-                    # is visible to the LLM. This prevents the LLM from terminating early
-                    # before mandatory verification completes.
-
-                    # BIP 8.1: Operation-specific geometry verification
-                    # Verify volume reduction for boolean subtract and hole operations
-                    if name == "boolean" and args.get("mode") == "subtract":
-                        # Verify that boolean subtract actually removed material
-                        base_id = args.get("target_id")
-                        result_id = args.get("id")
-                        if base_id and result_id:
-                            try:
-                                # Get mass properties of the base object (need to query before state changes)
-                                # Since the base object is now hidden, we need to get it from the result
-                                # The result object (Part::Cut) should have the reduced volume
-                                base_mass = self.adapter.execute_command(
-                                    "get_mass_properties", object_name=base_id)
-                                result_mass = self.adapter.execute_command(
-                                    "get_mass_properties", object_name=result_id)
-                                ok, reason = GeometryVerifier.verify_volume_reduction(
-                                    base_mass, result_mass)
-                                if not ok:
-                                    error_msg = f"Verification failed: {reason}"
-                                    print(
-                                        f"\033[91m[VERIFY] {error_msg}\033[0m")
-                                    # Convert success to failure for the agent recovery loop
-                                    success = False
-                                    error = RuntimeError(error_msg)
-                                    # Mark operation as failed
-                                    self._operation_registry.fail(
-                                        operation_id, "GeometryVerificationError", error_msg)
-                                    # Release mutation gate since we're treating this as failure
-                                    if is_mutation and gate_acquired:
-                                        self._mutation_gate.release(
-                                            operation_id)
-                            except Exception as e:
-                                # Verification error - treat as verification failure
-                                error_msg = f"Verification exception: {e}"
-                                print(
-                                    f"\033[91m[VERIFY] {error_msg}\033[0m")
-                                success = False
-                                error = RuntimeError(error_msg)
-                                # Mark operation as failed
-                                self._operation_registry.fail(
-                                    operation_id, "GeometryVerificationError", error_msg)
-                                # Release mutation gate
-                                if is_mutation and gate_acquired:
-                                    self._mutation_gate.release(
-                                        operation_id)
-
-                    elif name == "hole":
-                        # Verify that hole operation actually removed material
-                        target_id = args.get("target_id")
-                        result_id = args.get("id")
-                        if target_id and result_id:
-                            try:
-                                target_mass = self.adapter.execute_command(
-                                    "get_mass_properties", object_name=target_id)
-                                result_mass = self.adapter.execute_command(
-                                    "get_mass_properties", object_name=result_id)
-                                ok, reason = GeometryVerifier.verify_volume_reduction(
-                                    target_mass, result_mass)
-                                if not ok:
-                                    error_msg = f"Verification failed: {reason}"
-                                    print(
-                                        f"\033[91m[VERIFY] {error_msg}\033[0m")
-                                    # Convert success to failure for the agent recovery loop
-                                    success = False
-                                    error = RuntimeError(error_msg)
-                                    # Mark operation as failed
-                                    self._operation_registry.fail(
-                                        operation_id, "GeometryVerificationError", error_msg)
-                                    # Release mutation gate since we're treating this as failure
-                                    if is_mutation and gate_acquired:
-                                        self._mutation_gate.release(
-                                            operation_id)
-                            except Exception as e:
-                                # Verification error - treat as verification failure
-                                error_msg = f"Verification exception: {e}"
-                                print(
-                                    f"\033[91m[VERIFY] {error_msg}\033[0m")
-                                success = False
-                                error = RuntimeError(error_msg)
-                                # Mark operation as failed
-                                self._operation_registry.fail(
-                                    operation_id, "GeometryVerificationError", error_msg)
-                                # Release mutation gate
-                                if is_mutation and gate_acquired:
-                                    self._mutation_gate.release(
-                                        operation_id)
-
-                    # BIP 8.2: Operation-specific face-count verification
-                    # Verify face count increase for fillet, chamfer, and pattern operations
-                    elif name in ("fillet", "chamfer", "pattern_linear", "pattern_circular"):
-                        target_id = args.get("target_id")
-                        result_id = args.get("id")
-                        if target_id and result_id:
-                            try:
-                                # Get face count before and after operation
-                                # Note: we need the base object's faces. The target_id may be the base object
-                                # or the result object depending on the operation.
-                                # get_faces returns {"faces": [...], "topology_version": "..."}
-                                # We need to extract the faces array for verification.
-                                base_faces_raw = self.adapter.execute_command(
-                                    "get_faces", object_name=target_id)
-                                result_faces_raw = self.adapter.execute_command(
-                                    "get_faces", object_name=result_id)
-                                # Parse and extract faces array
-                                try:
-                                    base_faces_parsed = json.loads(
-                                        base_faces_raw)
-                                    base_faces = json.dumps(base_faces_parsed.get("faces", []) if isinstance(
-                                        base_faces_parsed, dict) else base_faces_parsed)
-                                except (json.JSONDecodeError, TypeError):
-                                    base_faces = "[]"
-                                try:
-                                    result_faces_parsed = json.loads(
-                                        result_faces_raw)
-                                    result_faces = json.dumps(result_faces_parsed.get("faces", []) if isinstance(
-                                        result_faces_parsed, dict) else result_faces_parsed)
-                                except (json.JSONDecodeError, TypeError):
-                                    result_faces = "[]"
-                                ok, reason = GeometryVerifier.verify_face_count_increase(
-                                    base_faces, result_faces)
-                                if not ok:
-                                    error_msg = f"Verification failed: {reason}"
-                                    print(
-                                        f"\033[91m[VERIFY] {error_msg}\033[0m")
-                                    # Convert success to failure for the agent recovery loop
-                                    success = False
-                                    error = RuntimeError(error_msg)
-                                    # Mark operation as failed
-                                    self._operation_registry.fail(
-                                        operation_id, "GeometryVerificationError", error_msg)
-                                    # Release mutation gate since we're treating this as failure
-                                    if is_mutation and gate_acquired:
-                                        self._mutation_gate.release(
-                                            operation_id)
-                            except Exception as e:
-                                # Verification error - treat as verification failure
-                                error_msg = f"Verification exception: {e}"
-                                print(
-                                    f"\033[91m[VERIFY] {error_msg}\033[0m")
-                                success = False
-                                error = RuntimeError(error_msg)
-                                # Mark operation as failed
-                                self._operation_registry.fail(
-                                    operation_id, "GeometryVerificationError", error_msg)
-                                # Release mutation gate
-                                if is_mutation and gate_acquired:
-                                    self._mutation_gate.release(
-                                        operation_id)
-
-                    # BIP 8.3: Bounding-box verification
-                    # Verify geometry stays within explicit user-specified bounds
-                    if self._bbox_constraints and success:
-                        result_id = args.get("id")
-                        if result_id:
-                            try:
-                                mass_json = self.adapter.execute_command(
-                                    "get_mass_properties", object_name=result_id)
-                                ok = GeometryVerifier.verify_within_bounding_box(
-                                    mass_json,
-                                    self._bbox_constraints.get(
-                                        "max_x", float('inf')),
-                                    self._bbox_constraints.get(
-                                        "max_y", float('inf')),
-                                    self._bbox_constraints.get(
-                                        "max_z", float('inf'))
-                                )
-                                if not ok:
-                                    error_msg = (
-                                        f"Verification failed: Geometry exceeds bounding-box constraints "
-                                        f"X={self._bbox_constraints.get('max_x')}mm "
-                                        f"Y={self._bbox_constraints.get('max_y')}mm "
-                                        f"Z={self._bbox_constraints.get('max_z')}mm"
-                                    )
-                                    print(
-                                        f"\033[91m[VERIFY] {error_msg}\033[0m")
-                                    # Convert success to failure for the agent recovery loop
-                                    success = False
-                                    error = RuntimeError(error_msg)
-                                    # Mark operation as failed
-                                    self._operation_registry.fail(
-                                        operation_id, "GeometryVerificationError", error_msg)
-                                    # Release mutation gate since we're treating this as failure
-                                    if is_mutation and gate_acquired:
-                                        self._mutation_gate.release(
-                                            operation_id)
-                            except Exception as e:
-                                # Verification error - treat as verification failure
-                                error_msg = f"Verification exception: {e}"
-                                print(
-                                    f"\033[91m[VERIFY] {error_msg}\033[0m")
-                                success = False
-                                error = RuntimeError(error_msg)
-                                # Mark operation as failed
-                                self._operation_registry.fail(
-                                    operation_id, "GeometryVerificationError", error_msg)
-                                # Release mutation gate
-                                if is_mutation and gate_acquired:
-                                    self._mutation_gate.release(
-                                        operation_id)
-
-                    # BIP 8.4: Mate verification.
-                    # Verify the geometric relationship produced by mate
-                    # operations. The verifier must receive the SPECIFIC
-                    # referenced face/edge dicts, not the raw get_faces/get_edges
-                    # wrapper payload ({"faces": [...], "topology_version": ...}).
-                    if name == "mate" and success:
-                        mate_type = args.get("mate_type", "").strip().lower()
-                        moving_target = args.get("moving_target")
-                        moving_ref = args.get("moving_ref")
-                        fixed_target = args.get("fixed_target")
-                        fixed_ref = args.get("fixed_ref")
-
-                        def _pick_ref(wrapper_raw, refs_key, ref_id_key, ref_id):
-                            """Extract one referenced face/edge dict from a
-                            get_faces/get_edges wrapper payload. Returns None
-                            when the specific reference cannot be resolved."""
-                            try:
-                                parsed = json.loads(wrapper_raw) if isinstance(
-                                    wrapper_raw, str) else wrapper_raw
-                            except (json.JSONDecodeError, TypeError):
-                                return None
-                            entries = None
-                            if isinstance(parsed, dict) and isinstance(
-                                    parsed.get(refs_key), list):
-                                entries = parsed[refs_key]
-                            elif isinstance(parsed, list):
-                                entries = parsed
-                            elif isinstance(parsed, dict) and ref_id_key in parsed:
-                                return parsed  # already a single ref dict
-                            if not entries:
-                                return None
-                            ref_s = str(ref_id)
-                            for e in entries:
-                                if isinstance(e, dict) and str(
-                                        e.get(ref_id_key)) == ref_s:
-                                    return e
-                            return None
-
-                        if moving_target and moving_ref and fixed_target and fixed_ref:
-                            try:
-                                if mate_type == "coincident":
-                                    # Get face data for both mated faces
-                                    moving_face_raw = self.adapter.execute_command(
-                                        "get_faces", object_name=moving_target)
-                                    fixed_face_raw = self.adapter.execute_command(
-                                        "get_faces", object_name=fixed_target)
-                                    m = _pick_ref(moving_face_raw, "faces",
-                                                  "face_id", moving_ref)
-                                    f = _pick_ref(fixed_face_raw, "faces",
-                                                  "face_id", fixed_ref)
-                                    if m is None or f is None:
-                                        ok, reason = False, (
-                                            f"mated face reference not found in "
-                                            f"topology (moving={moving_ref!r}, "
-                                            f"fixed={fixed_ref!r})")
-                                    else:
-                                        ok, reason = GeometryVerifier.verify_mate_coincident(
-                                            json.dumps(m), json.dumps(f))
-                                elif mate_type == "concentric":
-                                    # Get edge data for both mated edges
-                                    moving_edge_raw = self.adapter.execute_command(
-                                        "get_edges", object_name=moving_target)
-                                    fixed_edge_raw = self.adapter.execute_command(
-                                        "get_edges", object_name=fixed_target)
-                                    m = _pick_ref(moving_edge_raw, "edges",
-                                                  "edge_id", moving_ref)
-                                    f = _pick_ref(fixed_edge_raw, "edges",
-                                                  "edge_id", fixed_ref)
-                                    if m is None or f is None:
-                                        ok, reason = False, (
-                                            f"mated edge reference not found in "
-                                            f"topology (moving={moving_ref!r}, "
-                                            f"fixed={fixed_ref!r})")
-                                    else:
-                                        ok, reason = GeometryVerifier.verify_mate_concentric(
-                                            json.dumps(m), json.dumps(f))
-                                else:
-                                    ok, reason = True, f"mate type '{mate_type}' not verified (unsupported)"
-
-                                if not ok:
-                                    error_msg = f"Verification failed: {reason}"
-                                    print(
-                                        f"\033[91m[VERIFY] {error_msg}\033[0m")
-                                    # Convert success to failure for the agent recovery loop
-                                    success = False
-                                    error = RuntimeError(error_msg)
-                                    # Mark operation as failed
-                                    self._operation_registry.fail(
-                                        operation_id, "GeometryVerificationError", error_msg)
-                                    # Release mutation gate since we're treating this as failure
-                                    if is_mutation and gate_acquired:
-                                        self._mutation_gate.release(
-                                            operation_id)
-                            except Exception as e:
-                                # Verification error - treat as verification failure
-                                error_msg = f"Verification exception: {e}"
-                                print(
-                                    f"\033[91m[VERIFY] {error_msg}\033[0m")
-                                success = False
-                                error = RuntimeError(error_msg)
-                                # Mark operation as failed
-                                self._operation_registry.fail(
-                                    operation_id, "GeometryVerificationError", error_msg)
-                                # Release mutation gate
-                                if is_mutation and gate_acquired:
-                                    self._mutation_gate.release(
-                                        operation_id)
-
-                    # BIP 11.1: Parameter-level verification
-                    # Verify that requested parameters match actual CAD result.
-                    # This runs after geometric verification passes.
-                    if success and name in ("box", "cylinder", "hole", "fillet", "chamfer",
-                                            "pattern_linear", "pattern_circular", "boolean"):
-                        try:
-                            param_ok, param_reason = ParameterVerifier.verify_operation(
-                                tool=name, args=args, adapter=self.adapter,
-                                result_id=args.get("id"), target_id=args.get("target_id"))
-                            if param_ok == VerificationResult.FAIL:
-                                error_msg = f"Parameter verification failed: {param_reason}"
-                                print(f"\033[91m[VERIFY] {error_msg}\033[0m")
-                                success = False
-                                error = RuntimeError(error_msg)
-                                self._operation_registry.fail(
-                                    operation_id, "ParameterVerificationError", error_msg)
-                                if is_mutation and gate_acquired:
-                                    self._mutation_gate.release(operation_id)
-                            elif param_ok == VerificationResult.UNKNOWN:
-                                print(
-                                    f"[VERIFY] Parameter verification UNKNOWN: {param_reason}")
-                        except Exception as e:
-                            # Verification error - treat as verification failure
-                            error_msg = f"Verification exception: {e}"
-                            print(
-                                f"\033[91m[VERIFY] {error_msg}\033[0m")
-                            success = False
-                            error = RuntimeError(error_msg)
-                            self._operation_registry.fail(
-                                operation_id, "ParameterVerificationError", error_msg)
-                            if is_mutation and gate_acquired:
-                                self._mutation_gate.release(operation_id)
-
-                    # Only append result to results after ALL verifications pass
-                    if success:
-                        results.append(out)
-                        print(
-                            f"[Execution] Step {step+1}: Tool '{name}' succeeded: {out}")
-                        error_msg = None
-                        # BIP 7.0: Mark operation as succeeded in registry
-                        self._operation_registry.succeed(operation_id)
-                        # Release mutation gate on success
-                        if is_mutation and gate_acquired:
-                            self._mutation_gate.release(operation_id)
                 else:
                     if error is None:
                         error = RuntimeError(
@@ -1840,83 +2084,12 @@ class CADAgent:
                     "content": content
                 })
 
-            # 10a. Runtime geometry verification + IMMEDIATE STATE SYNC (BIP 4.3.2):
-            # After EVERY successful tool execution, refresh DesignState from the
-            # live CAD state BEFORE the next ReAct iteration. This ensures the
-            # compiled context for the next step reflects the actual CAD state.
-
-            # BIP 6.9: Also refresh state after a timeout to detect late completion
-            # of the underlying operation. This provides safe reconciliation.
-            needs_state_refresh = True
-            # Only skip if all operations in this step were query-only (get_state, get_edges, etc.)
-            mutation_tools = {"box", "cylinder", "boolean", "hole", "fillet", "chamfer",
-                              "shell", "edit_feature", "pattern_linear", "pattern_circular",
-                              "delete_feature", "mate", "sketch", "extrude"}
-            if all(tc.function.name not in mutation_tools for tc in response.tool_calls):
-                needs_state_refresh = False
-
-            state_retrieval_failed = False
-            if needs_state_refresh:
-                try:
-                    new_state_json = self.adapter.get_state()
-                    new_state = json.loads(new_state_json)
-                    # Immediately synchronize DesignState with the live CAD state.
-                    self._update_design_state(new_state_json)
-                    # BIP 7.0: Check if any unresolved operation's target now exists (late completion)
-                    self._check_pending_operations_against_state(new_state)
-                    # Periodic cleanup of old reconciled operations
-                    self._operation_registry.cleanup_reconciled(max_age=300.0)
-                except Exception as e:
-                    print(
-                        f"[Agent] Warning: Failed to get state for verification/sync: {e}")
-                    # Mark state as unavailable but preserve last known-good objects.
-                    self.design_state.mark_state_unavailable()
-                    state_retrieval_failed = True
-                    new_state = []
-            else:
-                new_state = []
-
-            errors = check_geometry(new_state)
-
-            # If state retrieval failed, inject a structured uncertainty notice.
-            # Do NOT treat unavailable verification as valid.
-            if state_retrieval_failed:
-                uncertainty_warning = (
-                    "WARNING: Geometry verification unavailable after last operation "
-                    "(CAD state retrieval failed). The authoritative CAD state could "
-                    "not be queried. You must verify the result manually or retry."
-                )
-                print(f"\033[93m[VERIFY] {uncertainty_warning}\033[0m")
-                scratchpad.append({
-                    "role": "system",
-                    "content": uncertainty_warning,
-                })
-                if self._capture_trace:
-                    self._trace.append({
-                        "step": step + 1,
-                        "type": "geometry_verification_unavailable",
-                        "reason": "state_retrieval_failed",
-                    })
-
-            if errors:
-                warning = (
-                    "WARNING: Geometry validation failed after last operation: "
-                    f"{errors}. You must use edit_feature or delete_feature to "
-                    "fix this before proceeding."
-                )
-                print(f"\033[93m[VERIFY] {warning}\033[0m")
-                # Inject the warning as context for the LLM's next reasoning step.
-                scratchpad.append({
-                    "role": "system",
-                    "content": warning,
-                })
-                if self._capture_trace:
-                    self._trace.append({
-                        "step": step + 1,
-                        "type": "geometry_warning",
-                        "errors": errors,
-                    })
-
+            # 10a. Runtime geometry verification + IMMEDIATE STATE SYNC (BIP 4.3.2).
+            # A5.6: refresh DesignState from the live CAD state, reconcile
+            # pending operations, clean up the operation registry, and inject
+            # any geometry uncertainty/warning into the scratchpad.
+            self._refresh_state_and_verify_geometry(
+                response, step, scratchpad)
             # 11. Loop repeats - do NOT return to user yet
             print(
                 f"[Agent] Step {step+1} complete. Continuing to next step...")
