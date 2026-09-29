@@ -188,6 +188,13 @@ class CADAgent:
     # from MAX_STEPS exhaustion, provider/API failure, context-budget
     # trimming/overflow, and tool execution failure.
     TOKEN_CEILING_TERMINATION_REASON = "token_ceiling"
+    # A6.4: Consistent named termination reasons for every terminal outcome, so
+    # the whole set is represented uniformly across the termination boundary.
+    MAX_STEPS_TERMINATION_REASON = "max_steps"
+    NO_TOOL_CALLS_TERMINATION_REASON = "no_tool_calls"
+    EMPTY_RESPONSE_TERMINATION_REASON = "empty_response_continue"
+    LLM_ERROR_TERMINATION_REASON = "llm_error"
+    LLM_TRANSIENT_EXHAUSTED_TERMINATION_REASON = "llm_transient_exhausted"
     # Bounded retry budget for transient LLM/provider transport failures.
     MAX_LLM_RETRIES = 2
     # Base backoff (seconds) between LLM retries; doubled per attempt.
@@ -787,19 +794,55 @@ class CADAgent:
         response: Any,
         step: int,
         session_tools: List[Any],
+        turn_start: Optional[float] = None,
     ):
         """Evaluate whether the ReAct loop should terminate, continue, or
-        proceed to tool execution (A5.4).
+        proceed to tool execution (A5.4, unified in A6.4).
 
-        Extracted verbatim from ``handle_message``. Returns a tuple
-        ``(outcome, value)``:
+        Returns a tuple ``(outcome, value)``:
           - ``("return", payload)``  -> the caller must ``return payload``
           - ``("continue", None)``   -> the caller must ``continue`` the loop
           - ``("tools", None)``      -> the caller must proceed to tool execution
 
+        Call phases (preserving the original per-step ordering exactly):
+          - ``response is None`` -> pre-step check. Evaluates the BIP 10.4b
+            overall turn-deadline FIRST, exactly where it used to run (before
+            the step's tools/state/LLM work). If no deadline tripped, returns
+            ``("tools", None)`` so the caller proceeds with the step.
+          - ``response`` present -> post-LLM check: token ceiling, then the
+            no-tool-calls/completion and empty-response branches.
+
         No new Enum/state machine is introduced: the plain-string outcome
-        mirrors the existing ``termination_reason`` string field.
+        mirrors the existing ``termination_reason`` string field, which is now
+        consistently sourced from the ``*_TERMINATION_REASON`` constants.
         """
+        # BIP 10.4b: overall wall-clock turn-deadline enforcement (pre-step).
+        # Does NOT kill an in-flight CAD mutation thread (that would falsely
+        # imply the operation stopped); any unresolved mutation stays tracked
+        # by the OperationRegistry/barrier. Runs before the step's tools/state/
+        # LLM work, identical to its original location.
+        if (response is None
+                and turn_start is not None
+                and self.MAX_TURN_SECONDS is not None
+                and (time.time() - turn_start) > self.MAX_TURN_SECONDS):
+            fail_msg = (
+                f"Operation stopped: overall turn deadline "
+                f"({self.MAX_TURN_SECONDS:.0f}s) reached at step "
+                f"{step + 1}. The CAD state may reflect completed earlier "
+                f"steps; any unresolved mutation remains tracked and must "
+                f"be reconciled before further mutation.")
+            print(f"\033[91m[ERROR] {fail_msg}\033[0m")
+            self.history.append({"role": "assistant", "content": fail_msg})
+            self.conversation.add_assistant(fail_msg)
+            if self._capture_trace:
+                self._trace.append({
+                    "step": step + 1,
+                    "type": "turn_deadline_reached",
+                    "message": fail_msg,
+                    "termination_reason": self.TURN_DEADLINE_TERMINATION_REASON,
+                })
+            return ("return", (fail_msg, session_tools))
+
         # BIP 10.4: Per-turn total-token ceiling enforcement.
         # If this LLM call caused the cumulative provider-reported total to
         # reach/exceed the configured ceiling, stop further LLM reasoning
@@ -836,6 +879,10 @@ class CADAgent:
         #    - meaningful content -> normal completion.
         #    - empty/None content -> do NOT claim "Done."; keep going so the
         #      LLM can produce a real response (bounded by MAX_STEPS).
+        if response is None:
+            # Pre-step phase with no deadline tripped: proceed with the step.
+            return ("tools", None)
+
         if not getattr(response, "tool_calls", None):
             raw_content = getattr(response, "content", None)
             reply = raw_content.strip() if isinstance(
@@ -855,7 +902,7 @@ class CADAgent:
                         "step": step + 1,
                         "type": "completion",
                         "reply": reply,
-                        "termination_reason": "no_tool_calls",
+                        "termination_reason": self.NO_TOOL_CALLS_TERMINATION_REASON,
                         "token_telemetry": self._token_telemetry.copy(),
                     })
                 return ("return", (reply, session_tools))
@@ -868,12 +915,32 @@ class CADAgent:
                 self._trace.append({
                     "step": step + 1,
                     "type": "empty_response",
-                    "termination_reason": "empty_response_continue",
+                    "termination_reason": self.EMPTY_RESPONSE_TERMINATION_REASON,
                     "token_telemetry": self._token_telemetry.copy(),
                 })
             return ("continue", None)
 
         return ("tools", None)
+
+    def _max_steps_termination(self, session_tools: List[Any]):
+        """Max-steps exhaustion termination (A6.4).
+
+        Extracted verbatim from the tail of ``handle_message``'s ReAct loop so
+        all terminal reasons share the same termination boundary. Returns the
+        structured ``(fail_msg, session_tools)`` payload the caller returns.
+        """
+        fail_msg = f"Operation incomplete: maximum reasoning steps ({self.MAX_STEPS}) reached."
+        print(f"\033[91m[ERROR] {fail_msg}\033[0m")
+        # Append failure message to long-term history
+        self.history.append({"role": "assistant", "content": fail_msg})
+        if self._capture_trace:
+            self._trace.append({
+                "step": self.MAX_STEPS,
+                "type": "max_steps_exhausted",
+                "message": fail_msg,
+                "termination_reason": self.MAX_STEPS_TERMINATION_REASON,
+            })
+        return fail_msg, session_tools
 
     def _verify_tool_outcome(
         self,
@@ -1624,29 +1691,15 @@ class CADAgent:
         for step in range(self.MAX_STEPS):
             print(f"\n=== [ReAct Step {step+1}/{self.MAX_STEPS}] ===")
 
-            # BIP 10.4b: enforce the overall wall-clock deadline BEFORE starting
-            # another step. Does NOT kill an in-flight CAD mutation thread (that
-            # would falsely imply the operation stopped); any unresolved
-            # mutation stays tracked by the OperationRegistry/barrier.
-            if (self.MAX_TURN_SECONDS is not None
-                    and (time.time() - turn_start) > self.MAX_TURN_SECONDS):
-                fail_msg = (
-                    f"Operation stopped: overall turn deadline "
-                    f"({self.MAX_TURN_SECONDS:.0f}s) reached at step "
-                    f"{step + 1}. The CAD state may reflect completed earlier "
-                    f"steps; any unresolved mutation remains tracked and must "
-                    f"be reconciled before further mutation.")
-                print(f"\033[91m[ERROR] {fail_msg}\033[0m")
-                self.history.append({"role": "assistant", "content": fail_msg})
-                self.conversation.add_assistant(fail_msg)
-                if self._capture_trace:
-                    self._trace.append({
-                        "step": step + 1,
-                        "type": "turn_deadline_reached",
-                        "message": fail_msg,
-                        "termination_reason": self.TURN_DEADLINE_TERMINATION_REASON,
-                    })
-                return fail_msg, session_tools
+            # BIP 10.4b / A6.4: pre-step termination evaluation. The overall
+            # wall-clock deadline is checked here (before the step's tools/
+            # state/LLM work), identical to its original location. Does NOT
+            # kill an in-flight CAD mutation thread; any unresolved mutation
+            # stays tracked by the OperationRegistry/barrier.
+            term_outcome, term_value = self._evaluate_termination(
+                None, step, session_tools, turn_start)
+            if term_outcome == "return":
+                return term_value
 
             # 1. Ask adapter for its active tools
             all_tools = self.adapter.get_tools()
@@ -1780,7 +1833,7 @@ class CADAgent:
                         "step": step + 1,
                         "type": "llm_error",
                         "error": fail_msg,
-                        "termination_reason": "llm_error",
+                        "termination_reason": self.LLM_ERROR_TERMINATION_REASON,
                         "token_telemetry": self._token_telemetry.copy(),
                     })
                 return fail_msg, session_tools
@@ -1800,7 +1853,7 @@ class CADAgent:
                         "step": step + 1,
                         "type": "llm_unavailable",
                         "message": fail_msg,
-                        "termination_reason": "llm_transient_exhausted",
+                        "termination_reason": self.LLM_TRANSIENT_EXHAUSTED_TERMINATION_REASON,
                         "token_telemetry": self._token_telemetry.copy(),
                     })
                 return fail_msg, session_tools
@@ -2133,19 +2186,8 @@ class CADAgent:
             print(
                 f"[Agent] Step {step+1} complete. Continuing to next step...")
 
-        # Max steps reached
-        fail_msg = f"Operation incomplete: maximum reasoning steps ({self.MAX_STEPS}) reached."
-        print(f"\033[91m[ERROR] {fail_msg}\033[0m")
-        # Append failure message to long-term history
-        self.history.append({"role": "assistant", "content": fail_msg})
-        if self._capture_trace:
-            self._trace.append({
-                "step": self.MAX_STEPS,
-                "type": "max_steps_exhausted",
-                "message": fail_msg,
-                "termination_reason": "max_steps",
-            })
-        return fail_msg, session_tools
+        # Max steps reached (A6.4: unified termination boundary)
+        return self._max_steps_termination(session_tools)
 
     def get_trace(self) -> list:
         """Return the captured ReAct execution trace (evaluation mode only).
