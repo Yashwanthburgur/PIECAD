@@ -55,9 +55,9 @@ async def chat_endpoint(request: ChatRequest):
 async def get_turn_telemetry():
     """Return per-turn telemetry metrics from the last handle_message call."""
     return {
-        "token_telemetry": agent._token_telemetry,
-        "context_telemetry": agent._context_telemetry,
-        "router_token_savings": agent._router_token_savings,
+        "token_telemetry": agent.get_token_telemetry(),
+        "context_telemetry": agent.get_context_telemetry(),
+        "router_token_savings": agent.get_router_token_savings(),
     }
 
 
