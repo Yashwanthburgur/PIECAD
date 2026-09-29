@@ -268,6 +268,27 @@ class FreeCADAdapter(CADAdapter):
         # signatures before executing fillet/chamfer. Kept optional so the
         # adapter remains usable standalone.
         self.design_state = None
+        # Identity generation counter for deterministic collision-free names
+        self._identity_counter: Dict[str, int] = {}
+
+    def _generate_object_id(self, tool_name: str) -> str:
+        """Generate a deterministic, collision-free object identity.
+
+        Format: {tool_name}_{n} where n is incremented per tool type.
+        This is server-side identity - LLM does not invent CAD object names.
+        """
+        # Increment counter for this tool type
+        current = self._identity_counter.get(tool_name, 0) + 1
+        self._identity_counter[tool_name] = current
+        return f"{tool_name}_{current}"
+
+    def _ensure_object_id(self, provided_id: Optional[str], tool_name: str) -> str:
+        """Return the server-generated object ID.
+
+        The server ALWAYS generates the object ID. LLM-provided IDs are ignored
+        to ensure the server owns all persistent CAD namespace identities.
+        """
+        return self._generate_object_id(tool_name)
 
     def _validate_stored_edge_signatures(self, target_id: str,
                                          edge_refs: list) -> None:
@@ -869,12 +890,13 @@ class FreeCADAdapter(CADAdapter):
 
             if tool_name == "box":
                 # Extract parameters from IR kwargs (required fields guaranteed by schema)
-                obj_id = kwargs["id"]
+                # Use server-generated identity if LLM didn't provide one
+                obj_id = self._ensure_object_id(kwargs.get("id"), "box")
                 length = float(kwargs["length"])
                 width = float(kwargs["width"])
                 height = float(kwargs["height"])
                 origin = _parse_dict_arg(kwargs.get("origin"), {
-                                         "x": 0.0, "y": 0.0, "z": 0.0})
+                    "x": 0.0, "y": 0.0, "z": 0.0})
 
                 # Create the box
                 result = self._call_proxy(
@@ -891,11 +913,12 @@ class FreeCADAdapter(CADAdapter):
 
             if tool_name == "cylinder":
                 # Extract parameters from IR kwargs (required fields guaranteed by schema)
-                obj_id = kwargs["id"]
+                # Use server-generated identity if LLM didn't provide one
+                obj_id = self._ensure_object_id(kwargs.get("id"), "cylinder")
                 radius = float(kwargs["radius"])
                 height = float(kwargs["height"])
                 origin = _parse_dict_arg(kwargs.get("origin"), {
-                                         "x": 0.0, "y": 0.0, "z": 0.0})
+                    "x": 0.0, "y": 0.0, "z": 0.0})
 
                 # Create the cylinder
                 result = self._call_proxy(
@@ -912,7 +935,8 @@ class FreeCADAdapter(CADAdapter):
 
             if tool_name == "boolean":
                 # Extract parameters from IR kwargs (required fields guaranteed by schema)
-                result_id = kwargs["id"]
+                # Use server-generated identity if LLM didn't provide one
+                result_id = self._ensure_object_id(kwargs.get("id"), "boolean")
                 mode = kwargs["mode"]
                 target_id = kwargs["target_id"]
                 tool_id = kwargs["tool_id"]
@@ -948,10 +972,11 @@ class FreeCADAdapter(CADAdapter):
                 return faces_result
 
             if tool_name == "hole":
-                obj_id = kwargs["id"]
+                # Use server-generated identity if LLM didn't provide one
+                obj_id = self._ensure_object_id(kwargs.get("id"), "hole")
                 target_id = kwargs["target_id"]
                 origin = _parse_dict_arg(kwargs.get("origin"), {
-                                         "x": 0.0, "y": 0.0, "z": 0.0})
+                    "x": 0.0, "y": 0.0, "z": 0.0})
                 direction = _parse_dict_arg(kwargs.get("direction"), {
                     "x": 0.0, "y": 0.0, "z": -1.0})
                 diameter = float(kwargs["diameter"])
@@ -986,7 +1011,8 @@ class FreeCADAdapter(CADAdapter):
                     thick = float(thick)
                 except Exception:
                     thick = -1.0
-                shell_id = kwargs.get("id") or "shell_op"
+                # Use server-generated identity if LLM didn't provide one
+                shell_id = self._ensure_object_id(kwargs.get("id"), "shell")
                 return str(
                     self._call_proxy(
                         "shell",
@@ -1037,10 +1063,12 @@ class FreeCADAdapter(CADAdapter):
                         elif len(refs) == 1 and not kwargs.get("moving_ref"):
                             kwargs["moving_ref"] = refs[0]
 
+                # Use server-generated identity if LLM didn't provide one
+                mate_id = self._ensure_object_id(kwargs.get("id"), "mate")
                 return str(
                     self._call_proxy(
                         "mate",
-                        kwargs.get("id") or "mate_op",
+                        mate_id,
                         str(kwargs.get("mate_type", "concentric")),
                         str(kwargs.get("moving_target", "")),
                         str(kwargs.get("moving_ref", "")),
@@ -1052,7 +1080,8 @@ class FreeCADAdapter(CADAdapter):
                 )
 
             if tool_name == "sketch":
-                obj_id = kwargs["id"]
+                # Use server-generated identity if LLM didn't provide one
+                obj_id = self._ensure_object_id(kwargs.get("id"), "sketch")
                 face_ref = kwargs["face_ref"]
                 shapes = kwargs["shapes"]
                 return str(
@@ -1065,7 +1094,8 @@ class FreeCADAdapter(CADAdapter):
                 )
 
             if tool_name == "extrude":
-                obj_id = kwargs["id"]
+                # Use server-generated identity if LLM didn't provide one
+                obj_id = self._ensure_object_id(kwargs.get("id"), "extrude")
                 sketch_id = kwargs["sketch_id"]
                 depth = float(kwargs["depth"])
                 is_cut = kwargs.get("is_cut", False)
@@ -1099,7 +1129,8 @@ class FreeCADAdapter(CADAdapter):
                 return edges_result
 
             if tool_name == "fillet":
-                obj_id = kwargs["id"]
+                # Use server-generated identity if LLM didn't provide one
+                obj_id = self._ensure_object_id(kwargs.get("id"), "fillet")
                 target_id = kwargs["target_id"]
                 edge_refs = kwargs["edge_refs"]
                 radius = float(kwargs["radius"])
@@ -1122,7 +1153,8 @@ class FreeCADAdapter(CADAdapter):
                 )
 
             if tool_name == "chamfer":
-                obj_id = kwargs["id"]
+                # Use server-generated identity if LLM didn't provide one
+                obj_id = self._ensure_object_id(kwargs.get("id"), "chamfer")
                 target_id = kwargs["target_id"]
                 edge_refs = kwargs["edge_refs"]
                 size = float(kwargs["size"])
@@ -1142,7 +1174,9 @@ class FreeCADAdapter(CADAdapter):
                 )
 
             if tool_name == "pattern_linear":
-                obj_id = kwargs["id"]
+                # Use server-generated identity if LLM didn't provide one
+                obj_id = self._ensure_object_id(
+                    kwargs.get("id"), "pattern_linear")
                 target_id = kwargs["target_id"]
                 direction = _parse_dict_arg(kwargs.get("direction"), {
                     "x": 1.0, "y": 0.0, "z": 0.0})
@@ -1161,7 +1195,9 @@ class FreeCADAdapter(CADAdapter):
                 )
 
             if tool_name == "pattern_circular":
-                obj_id = kwargs["id"]
+                # Use server-generated identity if LLM didn't provide one
+                obj_id = self._ensure_object_id(
+                    kwargs.get("id"), "pattern_circular")
                 target_id = kwargs["target_id"]
                 axis_origin = _parse_dict_arg(kwargs.get("axis_origin"), {
                     "x": 0.0, "y": 0.0, "z": 0.0})

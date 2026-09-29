@@ -10,7 +10,12 @@ class Vec3(BaseModel):
 
 class OpBase(BaseModel):
     op: str
-    id: str  # stable feature id, e.g. "obj_7f3a"
+    # id is optional for creation operations (server generates deterministic identity)
+    # but required for reference/editing/query operations where LLM specifies target.
+    id: Optional[str] = Field(
+        default=None,
+        description="Stable feature ID. Optional for creation ops (server generates); "
+        "required for reference/editing/query ops targeting existing objects.")
 
 
 FaceRef = str
@@ -142,8 +147,7 @@ class CircularPattern(OpBase):
 
 class Shell(OpBase):
     """Hollows out a solid 3D body into an open thin-walled container or enclosure."""
-    id: str = Field(
-        description="Unique identifier for the shell operation, e.g., 'shell_container'")
+    # id inherited from OpBase (optional for creation ops; server generates)
     op: Literal["shell"] = Field(
         default="shell", description="Operation type, must be 'shell'")
     target_id: str = Field(
@@ -154,10 +158,9 @@ class Shell(OpBase):
         description="Wall thickness in mm. Use negative numbers like -2.0 to hollow inward")
 
 
-class Mate(BaseModel):
+class Mate(OpBase):
     """Aligns and positions two independent bodies using geometric mates."""
-    id: str = Field(
-        description="Unique identifier for the mate operation, e.g. 'mate_1'")
+    # id inherited from OpBase (optional for creation ops; server generates)
     op: Literal["mate"] = Field(
         default="mate", description="Operation type, must be 'mate'")
     mate_type: Literal["concentric", "coincident"] = Field(
@@ -177,22 +180,22 @@ class Mate(BaseModel):
         default=False, description="Flip the alignment direction or face normals")
 
 
-class GetMassProperties(BaseModel):
+class GetMassProperties(OpBase):
     """Calculates volume, center of mass, and bounding box for a solid body."""
-    id: str = Field(description="Unique ID for this query")
+    # id inherited from OpBase (optional for queries; server generates)
     op: Literal["get_mass_properties"] = Field(default="get_mass_properties")
     object_name: str = Field(description="The ID of the object to analyze")
 
 
-class GetBOM(BaseModel):
+class GetBOM(OpBase):
     """Generates a Bill of Materials (list of all independent, visible solid parts in the assembly)."""
-    id: str = Field(description="Unique ID for this query")
+    # id inherited from OpBase (optional for queries; server generates)
     op: Literal["get_bom"] = Field(default="get_bom")
 
 
 class InterferenceCheck(OpBase):
     """Checks pairwise geometric interference (clashes) between active solid parts."""
-    id: str = Field(description="Unique ID for this query")
+    # id inherited from OpBase (optional for queries; server generates)
     op: Literal["interference_check"] = Field(
         default="interference_check",
         description="Operation type, must be 'interference_check'")
@@ -204,7 +207,7 @@ class InterferenceCheck(OpBase):
 
 class ExportModel(OpBase):
     """Exports the current visible assembly to a STEP or STL file."""
-    id: str = Field(description="Unique ID for this export operation")
+    # id inherited from OpBase (optional for queries; server generates)
     op: Literal["export"] = Field(
         default="export", description="Operation type, must be 'export'")
     format: Literal["step", "stl"] = Field(
@@ -215,7 +218,7 @@ class ExportModel(OpBase):
 
 class EditFeature(OpBase):
     """Modifies the parametric properties of an existing CAD feature (e.g., changing Length, Radius, Height)."""
-    id: str = Field(description="Unique ID for this query")
+    # id inherited from OpBase (optional; server generates)
     op: Literal["edit_feature"] = Field(default="edit_feature")
     target_id: str = Field(
         description="The ID of the object to modify, e.g., 'box1'")
