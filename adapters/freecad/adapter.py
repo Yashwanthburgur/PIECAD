@@ -740,15 +740,18 @@ class FreeCADAdapter(CADAdapter):
         finally:
             await client.disconnect()
 
-    def _execute_mcp_tool(self, name: str, args: Dict[str, Any]) -> str:
+    def _execute_mcp_tool(self, name: str, args: Dict[str, Any], timeout: float = _DEFAULT_MCP_TIMEOUT, operation_id: Optional[str] = None) -> str:
         """Execute a tool through the external MCP server client.
 
         Uses a synchronous wrapper over the async client and returns the
         serialized MCP response. Disconnects the client cleanly after use.
         On failure returns a JSON failure dict.
+
+        BIP 6.7: MCP tool execution is bounded by a timeout.
+        BIP 6.9: Include operation_id for late completion tracking.
         """
         worker = _get_mcp_worker()
-        return worker.execute_tool(name, args)
+        return worker.execute_tool(name, args, timeout=timeout, operation_id=operation_id)
 
     async def _async_execute_mcp_tool(self, name: str, args: Dict[str, Any]) -> str:
         """Async helper to execute an MCP tool and normalize its response."""
