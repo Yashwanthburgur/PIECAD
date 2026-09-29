@@ -270,6 +270,8 @@ class FreeCADAdapter(CADAdapter):
         self.design_state = None
         # Identity generation counter for deterministic collision-free names
         self._identity_counter: Dict[str, int] = {}
+        # A3.3: XML-RPC call counter for telemetry
+        self._rpc_call_count: int = 0
 
     def _generate_object_id(self, tool_name: str) -> str:
         """Generate a deterministic, collision-free object identity.
@@ -429,20 +431,24 @@ class FreeCADAdapter(CADAdapter):
         BIP 6.3: If the call fails with a connection/transport error, the proxy
         is recreated and the call is retried once. This allows agent-level retries
         (BIP 6.2) to succeed after a bridge restart.
+
+        A3.3: Increments the RPC call counter for each actual network dispatch.
         """
         proxy = self._ensure_proxy()
         try:
             method = getattr(proxy, method_name)
             result = method(*args, **kwargs)
             self._record_proxy_result(True)
+            self._rpc_call_count += 1  # A3.3: count successful dispatch
             return result
         except (ConnectionError, OSError, xmlrpc.client.ProtocolError) as e:
             self._record_proxy_result(False)
-            # Recreate proxy and retry once
+            # Recreate proxy and retry once - count both dispatches
             self._proxy = xmlrpc.client.ServerProxy(self.url, allow_none=True)
             method = getattr(self._proxy, method_name)
             result = method(*args, **kwargs)
             self._record_proxy_result(True)
+            self._rpc_call_count += 2  # A3.3: count failed + retry dispatch
             return result
 
     def _call_proxy_with_timeout(self, method_name: str, timeout: float, *args, **kwargs) -> Any:
@@ -486,6 +492,15 @@ class FreeCADAdapter(CADAdapter):
     # ------------------------------------------------------------------ #
     # External MCP tool execution (synchronous wrapper over the async client)
     # ------------------------------------------------------------------ #
+    # A3.3: RPC call counter accessors
+    def get_rpc_count(self) -> int:
+        """Return the current XML-RPC call count for this adapter instance."""
+        return self._rpc_call_count
+
+    def reset_rpc_count(self) -> None:
+        """Reset the XML-RPC call counter to zero."""
+        self._rpc_call_count = 0
+
     def _run_mcp_tool(self, tool_name: str, arguments: Dict[str, Any], timeout: float = _DEFAULT_MCP_TIMEOUT, operation_id: Optional[str] = None) -> str:
         """Execute a tool through the external MCP server client.
 

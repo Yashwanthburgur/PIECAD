@@ -54,20 +54,22 @@ async def chat_endpoint(request: ChatRequest):
     # handle_message now returns (response_text, session_tools); take the text.
     reply, session_tools = agent.handle_message(request.message)
 
-    # A3.2: Stop timer and fetch telemetry
+    # A3.2/A3.3: Stop timer and fetch telemetry
     duration = time.time() - start_time
     token_telemetry = agent.get_token_telemetry()
     total_tokens = token_telemetry.get("total_tokens", 0)
     # Steps = number of LLM calls for this turn
     steps = token_telemetry.get("llm_calls", 0)
-    # RPC Trips not implemented yet (A3.3)
-    rpc_count = 0
+    # A3.3: Get real RPC count from adapter
+    rpc_count = agent.adapter.get_rpc_count()
+    # Reset RPC counter for next turn
+    agent.adapter.reset_rpc_count()
 
     # A3.2: Print compact console summary
     print(
         f"[TURN_SUMMARY] Steps: {steps} | Tokens: {total_tokens} | RPC Trips: {rpc_count} | Time: {duration:.3f}s")
 
-    # A3.2: Add telemetry to response
+    # A3.2/A3.3: Add telemetry to response
     telemetry = {
         "duration_seconds": duration,
         "steps": steps,
