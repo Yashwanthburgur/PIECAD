@@ -1296,15 +1296,9 @@ class CADAgent:
                         requested_args_for_recording = failed_args
 
                 if success:
-                    results.append(out)
-                    print(
-                        f"[Execution] Step {step+1}: Tool '{name}' succeeded: {out}")
-                    error_msg = None
-                    # BIP 7.0: Mark operation as succeeded in registry
-                    self._operation_registry.succeed(operation_id)
-                    # Release mutation gate on success
-                    if is_mutation and gate_acquired:
-                        self._mutation_gate.release(operation_id)
+                    # BIP 8.x: Mandatory post-mutation verification runs BEFORE the result
+                    # is visible to the LLM. This prevents the LLM from terminating early
+                    # before mandatory verification completes.
 
                     # BIP 8.1: Operation-specific geometry verification
                     # Verify volume reduction for boolean subtract and hole operations
@@ -1329,15 +1323,7 @@ class CADAgent:
                                         f"\033[91m[VERIFY] {error_msg}\033[0m")
                                     # Convert success to failure for the agent recovery loop
                                     success = False
-                                    results[-1] = json.dumps({
-                                        "status": "error",
-                                        "tool": name,
-                                        "error_type": "GeometryVerificationError",
-                                        "error": error_msg,
-                                        "arguments": args,
-                                        "transient": False,
-                                        "retries": 0,
-                                    }, default=str)
+                                    error = RuntimeError(error_msg)
                                     # Mark operation as failed
                                     self._operation_registry.fail(
                                         operation_id, "GeometryVerificationError", error_msg)
@@ -1346,9 +1332,19 @@ class CADAgent:
                                         self._mutation_gate.release(
                                             operation_id)
                             except Exception as e:
-                                # Verification error - log but don't fail the operation
+                                # Verification error - treat as verification failure
+                                error_msg = f"Verification exception: {e}"
                                 print(
-                                    f"[VERIFY] Warning: Volume reduction check failed: {e}")
+                                    f"\033[91m[VERIFY] {error_msg}\033[0m")
+                                success = False
+                                error = RuntimeError(error_msg)
+                                # Mark operation as failed
+                                self._operation_registry.fail(
+                                    operation_id, "GeometryVerificationError", error_msg)
+                                # Release mutation gate
+                                if is_mutation and gate_acquired:
+                                    self._mutation_gate.release(
+                                        operation_id)
 
                     elif name == "hole":
                         # Verify that hole operation actually removed material
@@ -1368,15 +1364,7 @@ class CADAgent:
                                         f"\033[91m[VERIFY] {error_msg}\033[0m")
                                     # Convert success to failure for the agent recovery loop
                                     success = False
-                                    results[-1] = json.dumps({
-                                        "status": "error",
-                                        "tool": name,
-                                        "error_type": "GeometryVerificationError",
-                                        "error": error_msg,
-                                        "arguments": args,
-                                        "transient": False,
-                                        "retries": 0,
-                                    }, default=str)
+                                    error = RuntimeError(error_msg)
                                     # Mark operation as failed
                                     self._operation_registry.fail(
                                         operation_id, "GeometryVerificationError", error_msg)
@@ -1385,9 +1373,19 @@ class CADAgent:
                                         self._mutation_gate.release(
                                             operation_id)
                             except Exception as e:
-                                # Verification error - log but don't fail the operation
+                                # Verification error - treat as verification failure
+                                error_msg = f"Verification exception: {e}"
                                 print(
-                                    f"[VERIFY] Warning: Volume reduction check failed: {e}")
+                                    f"\033[91m[VERIFY] {error_msg}\033[0m")
+                                success = False
+                                error = RuntimeError(error_msg)
+                                # Mark operation as failed
+                                self._operation_registry.fail(
+                                    operation_id, "GeometryVerificationError", error_msg)
+                                # Release mutation gate
+                                if is_mutation and gate_acquired:
+                                    self._mutation_gate.release(
+                                        operation_id)
 
                     # BIP 8.2: Operation-specific face-count verification
                     # Verify face count increase for fillet, chamfer, and pattern operations
@@ -1428,15 +1426,7 @@ class CADAgent:
                                         f"\033[91m[VERIFY] {error_msg}\033[0m")
                                     # Convert success to failure for the agent recovery loop
                                     success = False
-                                    results[-1] = json.dumps({
-                                        "status": "error",
-                                        "tool": name,
-                                        "error_type": "GeometryVerificationError",
-                                        "error": error_msg,
-                                        "arguments": args,
-                                        "transient": False,
-                                        "retries": 0,
-                                    }, default=str)
+                                    error = RuntimeError(error_msg)
                                     # Mark operation as failed
                                     self._operation_registry.fail(
                                         operation_id, "GeometryVerificationError", error_msg)
@@ -1445,9 +1435,19 @@ class CADAgent:
                                         self._mutation_gate.release(
                                             operation_id)
                             except Exception as e:
-                                # Verification error - log but don't fail the operation
+                                # Verification error - treat as verification failure
+                                error_msg = f"Verification exception: {e}"
                                 print(
-                                    f"[VERIFY] Warning: Face count increase check failed: {e}")
+                                    f"\033[91m[VERIFY] {error_msg}\033[0m")
+                                success = False
+                                error = RuntimeError(error_msg)
+                                # Mark operation as failed
+                                self._operation_registry.fail(
+                                    operation_id, "GeometryVerificationError", error_msg)
+                                # Release mutation gate
+                                if is_mutation and gate_acquired:
+                                    self._mutation_gate.release(
+                                        operation_id)
 
                     # BIP 8.3: Bounding-box verification
                     # Verify geometry stays within explicit user-specified bounds
@@ -1477,15 +1477,7 @@ class CADAgent:
                                         f"\033[91m[VERIFY] {error_msg}\033[0m")
                                     # Convert success to failure for the agent recovery loop
                                     success = False
-                                    results[-1] = json.dumps({
-                                        "status": "error",
-                                        "tool": name,
-                                        "error_type": "GeometryVerificationError",
-                                        "error": error_msg,
-                                        "arguments": args,
-                                        "transient": False,
-                                        "retries": 0,
-                                    }, default=str)
+                                    error = RuntimeError(error_msg)
                                     # Mark operation as failed
                                     self._operation_registry.fail(
                                         operation_id, "GeometryVerificationError", error_msg)
@@ -1494,9 +1486,19 @@ class CADAgent:
                                         self._mutation_gate.release(
                                             operation_id)
                             except Exception as e:
-                                # Verification error - log but don't fail the operation
+                                # Verification error - treat as verification failure
+                                error_msg = f"Verification exception: {e}"
                                 print(
-                                    f"[VERIFY] Warning: Bounding-box check failed: {e}")
+                                    f"\033[91m[VERIFY] {error_msg}\033[0m")
+                                success = False
+                                error = RuntimeError(error_msg)
+                                # Mark operation as failed
+                                self._operation_registry.fail(
+                                    operation_id, "GeometryVerificationError", error_msg)
+                                # Release mutation gate
+                                if is_mutation and gate_acquired:
+                                    self._mutation_gate.release(
+                                        operation_id)
 
                     # BIP 8.4: Mate verification.
                     # Verify the geometric relationship produced by mate
@@ -1583,15 +1585,7 @@ class CADAgent:
                                         f"\033[91m[VERIFY] {error_msg}\033[0m")
                                     # Convert success to failure for the agent recovery loop
                                     success = False
-                                    results[-1] = json.dumps({
-                                        "status": "error",
-                                        "tool": name,
-                                        "error_type": "GeometryVerificationError",
-                                        "error": error_msg,
-                                        "arguments": args,
-                                        "transient": False,
-                                        "retries": 0,
-                                    }, default=str)
+                                    error = RuntimeError(error_msg)
                                     # Mark operation as failed
                                     self._operation_registry.fail(
                                         operation_id, "GeometryVerificationError", error_msg)
@@ -1600,9 +1594,19 @@ class CADAgent:
                                         self._mutation_gate.release(
                                             operation_id)
                             except Exception as e:
-                                # Verification error - log but don't fail the operation
+                                # Verification error - treat as verification failure
+                                error_msg = f"Verification exception: {e}"
                                 print(
-                                    f"[VERIFY] Warning: Mate verification check failed: {e}")
+                                    f"\033[91m[VERIFY] {error_msg}\033[0m")
+                                success = False
+                                error = RuntimeError(error_msg)
+                                # Mark operation as failed
+                                self._operation_registry.fail(
+                                    operation_id, "GeometryVerificationError", error_msg)
+                                # Release mutation gate
+                                if is_mutation and gate_acquired:
+                                    self._mutation_gate.release(
+                                        operation_id)
 
                     # BIP 11.1: Parameter-level verification
                     # Verify that requested parameters match actual CAD result.
@@ -1617,15 +1621,7 @@ class CADAgent:
                                 error_msg = f"Parameter verification failed: {param_reason}"
                                 print(f"\033[91m[VERIFY] {error_msg}\033[0m")
                                 success = False
-                                results[-1] = json.dumps({
-                                    "status": "error",
-                                    "tool": name,
-                                    "error_type": "ParameterVerificationError",
-                                    "error": error_msg,
-                                    "arguments": args,
-                                    "transient": False,
-                                    "retries": 0,
-                                }, default=str)
+                                error = RuntimeError(error_msg)
                                 self._operation_registry.fail(
                                     operation_id, "ParameterVerificationError", error_msg)
                                 if is_mutation and gate_acquired:
@@ -1634,8 +1630,28 @@ class CADAgent:
                                 print(
                                     f"[VERIFY] Parameter verification UNKNOWN: {param_reason}")
                         except Exception as e:
+                            # Verification error - treat as verification failure
+                            error_msg = f"Verification exception: {e}"
                             print(
-                                f"[VERIFY] Warning: Parameter verification check failed: {e}")
+                                f"\033[91m[VERIFY] {error_msg}\033[0m")
+                            success = False
+                            error = RuntimeError(error_msg)
+                            self._operation_registry.fail(
+                                operation_id, "ParameterVerificationError", error_msg)
+                            if is_mutation and gate_acquired:
+                                self._mutation_gate.release(operation_id)
+
+                    # Only append result to results after ALL verifications pass
+                    if success:
+                        results.append(out)
+                        print(
+                            f"[Execution] Step {step+1}: Tool '{name}' succeeded: {out}")
+                        error_msg = None
+                        # BIP 7.0: Mark operation as succeeded in registry
+                        self._operation_registry.succeed(operation_id)
+                        # Release mutation gate on success
+                        if is_mutation and gate_acquired:
+                            self._mutation_gate.release(operation_id)
                 else:
                     if error is None:
                         error = RuntimeError(
