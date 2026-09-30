@@ -56,6 +56,9 @@ from core.verification.checks import GeometryVerifier  # noqa: E402
 # A7.2: deterministic, offline scripted provider (eval infrastructure only).
 from scripts.scripted_provider import provider_from_fixture  # noqa: E402
 
+# A7.5: evaluation reporting layer
+from scripts.eval_reporting import build_report, to_json  # noqa: E402
+
 
 # --------------------------------------------------------------------------- #
 # Adapter selection: prefer the real FreeCAD adapter; fall back to a mock so   #
@@ -886,6 +889,9 @@ def evaluate_fixture(
         # Mock adapter / backends without clear_document are fine.
         pass
 
+    import time
+    turn_start = time.monotonic()
+
     try:
         # handle_message returns (response_text, session_tools); unpack the
         # tools the agent actually invoked across the whole session.
@@ -898,7 +904,12 @@ def evaluate_fixture(
             "got": [],
             "failure_category": "agent_execution_error",
             "reason": f"agent.handle_message raised {type(exc).__name__}: {exc}",
+            "telemetry": {
+                "duration_seconds": time.monotonic() - turn_start,
+            },
         }
+
+    turn_duration = time.monotonic() - turn_start
 
     got = collect_actual_tools(called_tools, agent)
 
@@ -906,6 +917,19 @@ def evaluate_fixture(
     trace = agent.get_trace()
     # Store trace on adapter for access by assertion functions
     adapter._agent_trace = trace
+
+    # --- Capture telemetry from agent (public APIs only) ---
+    token_telemetry = agent.get_token_telemetry() or {}
+    context_telemetry = agent.get_context_telemetry() or []
+    router_token_savings = agent.get_router_token_savings() or []
+
+    # Capture RPC trips from adapter if available
+    rpc_trips = 0
+    if hasattr(adapter, "_backend") and hasattr(adapter._backend, "get_rpc_count"):
+        try:
+            rpc_trips = adapter._backend.get_rpc_count()
+        except Exception:
+            rpc_trips = 0
 
     # --- STEP 1: success criteria ----------------------------------- #
     # 1. tools_passed: every expected tool must have been called (set coverage).
@@ -932,15 +956,28 @@ def evaluate_fixture(
     termination_reason = "normal"
     if trace:
         last_entry = trace[-1]
-        if last_entry.get("type") == "max_steps_exhausted":
+        entry_type = last_entry.get("type")
+        if entry_type == "max_steps_exhausted":
             termination_reason = "max_steps"
-        elif last_entry.get("type") == "completion":
+        elif entry_type == "completion":
             termination_reason = "normal"
+        elif entry_type == "empty_response":
+            termination_reason = "empty_response"
+        elif entry_type == "turn_deadline_reached":
+            termination_reason = "turn_deadline"
+        elif entry_type == "token_ceiling_reached":
+            termination_reason = "token_ceiling"
+        elif entry_type == "llm_error":
+            termination_reason = "llm_error"
+        elif entry_type == "llm_unavailable":
+            termination_reason = "llm_transient_exhausted"
         elif last_entry.get("success") is False:
             termination_reason = "tool_execution_error"
 
     # 5. Overall pass: all criteria must pass
-    passed = tools_passed and sequence_passed and assertions_passed
+    # Also require termination to be "normal" for a clean pass (abnormal termination
+    # cannot silently become a clean success even if tools/sequence/assertions passed)
+    passed = tools_passed and sequence_passed and assertions_passed and termination_reason == "normal"
 
     # Determine failure category
     failure_category = None
@@ -955,8 +992,24 @@ def evaluate_fixture(
             failure_category = "max_steps_exhausted"
         elif termination_reason == "tool_execution_error":
             failure_category = "tool_execution_error"
+        elif termination_reason in ("empty_response", "turn_deadline", "token_ceiling", "llm_error", "llm_transient_exhausted"):
+            failure_category = termination_reason
         else:
             failure_category = "unknown"
+
+    # Build telemetry structure for the reporting layer
+    telemetry = {
+        "duration_seconds": turn_duration,
+        "steps": token_telemetry.get("llm_calls"),
+        "total_tokens": token_telemetry.get("total_tokens"),
+        "prompt_tokens": token_telemetry.get("total_input_tokens"),
+        "completion_tokens": token_telemetry.get("total_output_tokens"),
+        "router_token_savings": token_telemetry.get("router_token_savings"),
+        "context_telemetry": context_telemetry,
+        "rpc_trips": rpc_trips if rpc_trips else None,
+    }
+    # Prune None values for cleaner output, but leave explicit zeros
+    telemetry = {k: v for k, v in telemetry.items() if v is not None}
 
     return {
         "name": name,
@@ -972,6 +1025,7 @@ def evaluate_fixture(
         "termination_reason": termination_reason,
         "failure_category": failure_category,
         "trace": trace if trace else None,
+        "telemetry": telemetry,
     }
 
 
@@ -985,11 +1039,12 @@ def _parse_args() -> "argparse.Namespace":
     )
     parser.add_argument(
         "--test",
-        type=str,
-        default=None,
+        action="append",
+        default=[],
         metavar="NAME",
-        help="Run ONLY the fixture whose id or name matches NAME "
-             "(e.g. --test primitive_creation). Skips all other fixtures.",
+        help="Run ONLY the fixture(s) whose id or name matches NAME "
+             "(e.g. --test scripted_happy_path --test scripted_multi_step). "
+             "Can be specified multiple times. If omitted, all fixtures run.",
     )
     parser.add_argument(
         "--offline",
@@ -1006,20 +1061,30 @@ def main() -> int:
     fixtures_path = os.path.join(PROJECT_ROOT, "tests", "eval_fixtures.json")
     fixtures = load_fixtures(fixtures_path)
 
-    # Single-fixture mode: filter to ONLY the requested fixture.
+    # Single-fixture mode: filter to ONLY the requested fixtures.
     if args.test:
-        wanted = args.test.strip()
-        filtered = [
-            f for f in fixtures
-            if wanted in (f.get("id"), f.get("name"))
-        ]
-        if not filtered:
-            print(f"[ERROR] No fixture found matching '{wanted}'. "
-                  f"Available: {[f.get('id') or f.get('name') for f in fixtures]}")
-            return 1
-        print(f"[--test] Running ONLY fixture matching '{wanted}' "
-              f"({len(filtered)} fixture).")
-        fixtures = filtered
+        filtered = []
+        for wanted in args.test:
+            matches = [
+                f for f in fixtures
+                if wanted in (f.get("id"), f.get("name"))
+            ]
+            if not matches:
+                print(f"[ERROR] No fixture found matching '{wanted}'. "
+                      f"Available: {[f.get('id') or f.get('name') for f in fixtures]}")
+                return 1
+            filtered.extend(matches)
+        # De-duplicate while preserving order
+        seen = set()
+        unique_filtered = []
+        for f in filtered:
+            fid = f.get("id") or f.get("name")
+            if fid not in seen:
+                seen.add(fid)
+                unique_filtered.append(f)
+        fixtures = unique_filtered
+        print(f"[--test] Running ONLY {len(fixtures)} fixture(s): "
+              f"{[f.get('id') or f.get('name') for f in fixtures]}")
 
     print(f"Loaded {len(fixtures)} fixtures from {fixtures_path}\n")
 
@@ -1068,6 +1133,17 @@ def main() -> int:
         print(f"  [{status}] {r['name']}")
     print("-" * 60)
     print(f"SCOREBOARD: {passing}/{total} PASSING")
+
+    # --- A7.6: Reporting integration ---
+    # Build and print a descriptive aggregate report using the reporting layer
+    try:
+        report = build_report(results)
+        print("\n" + "=" * 60)
+        print("AGGREGATE REPORT (A7.5 reporting layer)")
+        print("=" * 60)
+        print(to_json(report, indent=2))
+    except Exception as e:
+        print(f"[WARN] Reporting layer failed: {e}")
 
     return 0 if passing == total else 1
 
