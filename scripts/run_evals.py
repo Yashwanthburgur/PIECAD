@@ -1123,6 +1123,7 @@ def main() -> int:
         results.append(res)
 
     passing = sum(1 for r in results if r["passed"])
+    failed = sum(1 for r in results if not r["passed"])
     total = len(results)
 
     print("\n" + "=" * 60)
@@ -1130,9 +1131,15 @@ def main() -> int:
     print("=" * 60)
     for r in results:
         status = "PASS" if r["passed"] else "FAIL"
-        print(f"  [{status}] {r['name']}")
+        fc = r.get("failure_category") or "N/A"
+        tr = r.get("termination_reason") or "N/A"
+        print(f"  [{status}] {r['name']} | failure_category={fc} | termination={tr}")
     print("-" * 60)
     print(f"SCOREBOARD: {passing}/{total} PASSING")
+    print(f"TOTAL FIXTURES: {total}")
+    print(f"PASSED: {passing}")
+    print(f"FAILED: {failed}")
+    print(f"N/M: {passing}/{total}")
 
     # --- A7.6: Reporting integration ---
     # Build and print a descriptive aggregate report using the reporting layer
