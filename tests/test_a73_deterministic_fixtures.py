@@ -1,6 +1,6 @@
 """A7.3 — Deterministic evaluation fixtures tests.
 
-Proves the four scripted fixtures added to tests/eval_fixtures.json are scored
+Proves the seven scripted fixtures added to tests/eval_fixtures.json are scored
 correctly by the existing evaluator, fully offline, and reproducibly.
 
 No live LLM is used: each fixture carries ``scripted_responses`` and is scored
@@ -23,6 +23,9 @@ DETERMINISTIC_IDS = {
     "scripted_multi_step",
     "scripted_tool_failure",
     "scripted_retry_recovery",
+    "termination_valid_final_mutation",
+    "termination_post_final_verification_rejection",
+    "termination_intermediate_verification_valid",
 }
 
 _STATE = json.dumps([
@@ -119,14 +122,50 @@ def test_scripted_retry_recovery_scores_via_retry_pattern():
     assert res["failed_assertions"] == []
 
 
+def test_termination_valid_final_mutation_scores():
+    res = evaluate_fixture(_load_fixture("termination_valid_final_mutation"),
+                           StatefulStubAdapter())
+    assert res["passed"] is True
+    assert res["tools_passed"] is True
+    assert res["assertions_passed"] is True
+    assert "box" in [t.lower() for t in res["got"]]
+
+
+def test_termination_post_final_verification_rejection_scores():
+    """This fixture should FAIL the termination guard assertion."""
+    res = evaluate_fixture(_load_fixture("termination_post_final_verification_rejection"),
+                           StatefulStubAdapter())
+    assert res["passed"] is False
+    assert res["failure_category"] == "assertion"
+    assert any("termination_guard" in str(fa)
+               for fa in res["failed_assertions"])
+    assert any("get_mass_properties" in str(fa)
+               for fa in res["failed_assertions"])
+
+
+def test_termination_intermediate_verification_valid_scores():
+    res = evaluate_fixture(_load_fixture("termination_intermediate_verification_valid"),
+                           StatefulStubAdapter())
+    assert res["passed"] is True
+    assert res["tools_passed"] is True
+    assert res["assertions_passed"] is True
+    got = [t.lower() for t in res["got"]]
+    assert "box" in got
+    assert "get_mass_properties" in got
+    assert "cylinder" in got
+
+
 def test_deterministic_fixtures_are_reproducible():
     """Two consecutive evaluations of each fixture yield identical outcomes."""
     for fid in DETERMINISTIC_IDS:
         fx = _load_fixture(fid)
         first = evaluate_fixture(fx, StatefulStubAdapter())
         second = evaluate_fixture(fx, StatefulStubAdapter())
-        assert first["passed"] == second["passed"] is True, fid
+        # termination_post_final_verification_rejection is designed to fail
+        expected_passed = fid != "termination_post_final_verification_rejection"
+        assert first["passed"] == second["passed"] == expected_passed, fid
         assert first["got"] == second["got"], fid
+        assert first["failure_category"] == second["failure_category"], fid
 
 
 def test_non_scripted_fixtures_unchanged():
@@ -135,3 +174,8 @@ def test_non_scripted_fixtures_unchanged():
     scripted = {fx.get("id")
                 for fx in fixtures if fx.get("scripted_responses")}
     assert scripted == DETERMINISTIC_IDS
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import pytest
+    raise SystemExit(pytest.main([__file__, "-v"]))

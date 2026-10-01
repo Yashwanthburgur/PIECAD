@@ -489,5 +489,135 @@
       ],
       [null, "Recovered."]
     ]
+  },
+  {
+    "id": "termination_valid_final_mutation",
+    "name": "Termination Valid Final Mutation",
+    "prompt": "Create a box.",
+    "expected_tools_called": ["box"],
+    "neutral_assertions": [
+      {
+        "type": "termination_guard",
+        "expect_final_mutation": true,
+        "expect_verification_after_final_mutation": false
+      }
+    ],
+    "scripted_responses": [
+      [
+        [
+          [
+            "box",
+            {
+              "id": "box1",
+              "length": 10,
+              "width": 10,
+              "height": 10
+            }
+          ]
+        ],
+        null
+      ],
+      [null, "Created a 10x10x10 mm box."]
+    ]
+  },
+  {
+    "id": "termination_post_final_verification_rejection",
+    "name": "Termination Post-Final Verification Rejection",
+    "prompt": "Create a box then verify it.",
+    "expected_tools_called": ["box", "get_mass_properties"],
+    "neutral_assertions": [
+      {
+        "type": "termination_guard",
+        "expect_final_mutation": true,
+        "expect_verification_after_final_mutation": false
+      }
+    ],
+    "scripted_responses": [
+      [
+        [
+          [
+            "box",
+            {
+              "id": "box1",
+              "length": 10,
+              "width": 10,
+              "height": 10
+            }
+          ]
+        ],
+        null
+      ],
+      [
+        [
+          [
+            "get_mass_properties",
+            {
+              "object_name": "box1"
+            }
+          ]
+        ],
+        null
+      ],
+      [null, "Box created and verified."]
+    ]
+  },
+  {
+    "id": "termination_intermediate_verification_valid",
+    "name": "Termination Intermediate Verification Valid",
+    "prompt": "Create a box, verify it, then create a cylinder.",
+    "expected_tools_called": ["box", "get_mass_properties", "cylinder"],
+    "expected_tool_sequence": ["box", "get_mass_properties", "cylinder"],
+    "neutral_assertions": [
+      {
+        "type": "termination_guard",
+        "expect_final_mutation": true,
+        "expect_verification_after_final_mutation": false
+      },
+      {
+        "type": "tool_sequence",
+        "sequence": ["box", "get_mass_properties", "cylinder"]
+      }
+    ],
+    "scripted_responses": [
+      [
+        [
+          [
+            "box",
+            {
+              "id": "box1",
+              "length": 10,
+              "width": 10,
+              "height": 10
+            }
+          ]
+        ],
+        null
+      ],
+      [
+        [
+          [
+            "get_mass_properties",
+            {
+              "object_name": "box1"
+            }
+          ]
+        ],
+        null
+      ],
+      [
+        [
+          [
+            "cylinder",
+            {
+              "id": "cyl1",
+              "radius": 5,
+              "height": 20
+            }
+          ]
+        ],
+        null
+      ],
+      [null, "Created a box, verified it, then created a cylinder."]
+    ]
   }
 ]

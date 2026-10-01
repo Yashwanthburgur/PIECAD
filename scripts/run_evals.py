@@ -536,6 +536,83 @@ def _check_retry_assertion(
     return True, "retry pattern verified"
 
 
+def _check_termination_guard(
+    trace: List[Dict[str, Any]],
+    assertion: Dict[str, Any]
+) -> tuple[bool, str]:
+    """Check termination guard assertion - ensures no verification tools run after final mutation.
+
+    Assertion format:
+    {
+        "type": "termination_guard",
+        "expect_final_mutation": true,        # the last tool call should be a mutation
+        "expect_verification_after_final_mutation": false  # no verification tools after final mutation
+    }
+
+    Mutation tools: box, cylinder, boolean, hole, fillet, chamfer, shell, edit_feature,
+                    pattern_linear, pattern_circular, delete_feature, mate, sketch, extrude
+
+    Verification tools: get_mass_properties, get_faces, get_edges, interference_check
+    """
+    expect_final_mutation = assertion.get("expect_final_mutation", True)
+    expect_verification_after = assertion.get("expect_verification_after_final_mutation", False)
+
+    if not trace:
+        return False, "no trace available for termination guard check"
+
+    # Define mutation and verification tool sets
+    mutation_tools = {
+        "box", "cylinder", "boolean", "hole", "fillet", "chamfer",
+        "shell", "edit_feature", "pattern_linear", "pattern_circular",
+        "delete_feature", "mate", "sketch", "extrude"
+    }
+    verification_tools = {
+        "get_mass_properties", "get_faces", "get_edges", "interference_check"
+    }
+
+    # Extract tool calls from trace in order
+    tool_calls = []
+    for entry in trace:
+        if "tool" in entry:
+            tool_calls.append({
+                "tool": entry["tool"],
+                "success": entry.get("success", True),
+                "step": entry.get("step", 0)
+            })
+
+    if not tool_calls:
+        return False, "no tool calls in trace"
+
+    # Find the last mutation tool call
+    last_mutation_idx = -1
+    for i, tc in enumerate(tool_calls):
+        if tc["tool"] in mutation_tools:
+            last_mutation_idx = i
+
+    if last_mutation_idx == -1:
+        if expect_final_mutation:
+            return False, "no mutation tool found in trace"
+        else:
+            return True, "no mutation tools expected, none found"
+
+    if expect_final_mutation and last_mutation_idx != len(tool_calls) - 1:
+        # Check if there are any verification tools after the final mutation
+        tools_after_mutation = tool_calls[last_mutation_idx + 1:]
+        verification_after = [tc for tc in tools_after_mutation if tc["tool"] in verification_tools]
+
+        if verification_after and not expect_verification_after:
+            return False, f"verification tool(s) {', '.join(tc['tool'] for tc in verification_after)} executed after final mutation ({tool_calls[last_mutation_idx]['tool']}) at step {tool_calls[last_mutation_idx]['step']}"
+
+    # If we expect verification after final mutation, check it exists
+    if expect_verification_after:
+        tools_after_mutation = tool_calls[last_mutation_idx + 1:]
+        verification_after = [tc for tc in tools_after_mutation if tc["tool"] in verification_tools]
+        if not verification_after:
+            return False, f"expected verification tool after final mutation ({tool_calls[last_mutation_idx]['tool']}) but none found"
+
+    return True, "termination guard passed"
+
+
 def _check_geometry_assertion(
     fixture: Dict[str, Any],
     adapter: "RecordingAdapter",
@@ -822,6 +899,13 @@ def run_neutral_assertions(
                         trace = getattr(adapter, "_agent_trace", [])
                         ok, reason = _check_retry_assertion(trace, assertion)
                         details.append(("retry_pattern", ok, reason))
+                        if not ok:
+                            results["passed"] = False
+
+                    elif atype == "termination_guard":
+                        trace = getattr(adapter, "_agent_trace", [])
+                        ok, reason = _check_termination_guard(trace, assertion)
+                        details.append(("termination_guard", ok, reason))
                         if not ok:
                             results["passed"] = False
 
