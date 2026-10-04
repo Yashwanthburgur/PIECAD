@@ -174,6 +174,302 @@ class ToolExecutionResult:
     malformed_result: Any = None
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Scratchpad compaction (BIP 4.2 / token ceiling mitigation)
+# ──────────────────────────────────────────────────────────────────────────
+# The scratchpad accumulates assistant tool calls + tool results across ReAct
+# steps. To prevent unbounded token growth while preserving CAD-critical
+# information, we compact older interactions into concise summaries.
+#
+# What MUST be preserved in summaries:
+#   - stale topology state per target (NOT in DesignState)
+#   - face/edge reference counts for stale targets (helps agent avoid extra get_edges)
+#   - verification warnings (transient, not in DesignState)
+#
+# What can be dropped (redundant with DesignState/ContextCompiler):
+#   - object IDs / result IDs (in DesignState.objects)
+#   - topology versions (DesignState has authoritative versions)
+#   - operation parameters (DesignState.object.properties)
+#   - success/failure history (DesignState.recent_operations)
+#   - normal errors (DesignState.recent_errors)
+#   - historical event sequence
+#   - face/edge refs for non-stale operations (DesignState has via get_edges)
+#
+# Compaction is deterministic and local — NO LLM CALLS.
+
+# Persistent scratchpad summary buffer.
+# Stored on the CADAgent instance to survive across compaction calls.
+# Each compaction merges new history into this single buffer.
+# keep this many recent raw messages verbatim
+_SCRATCHPAD_KEEP_RECENT = 6
+_SCRATCHPAD_SUMMARY_PREFIX = "[scratchpad summary] "
+
+
+def _format_persistent_summary(summary_dict: dict) -> str:
+    """Convert internal summary dictionary to LLM-readable string."""
+    if not summary_dict:
+        return ""
+    parts = []
+    # Stale topology entries (deduplicated per target)
+    stale = summary_dict.get("stale", {})
+    if stale:
+        for target_id, info in stale.items():
+            version = info.get("version", "unknown")
+            refs = info.get("refs")
+            part = f"STALE: {target_id} (v{version})"
+            if refs:
+                part += f" | {refs.get('type', 'edge')}_refs={refs.get('count', 1)}"
+            parts.append(part)
+    # Verification warnings (keep last 10)
+    warnings = summary_dict.get("warnings", [])
+    if warnings:
+        for w in warnings[-10:]:
+            # Avoid double "WARNING:" prefix if already present
+            if w.startswith("WARNING:"):
+                parts.append(w)
+            else:
+                parts.append(f"WARNING: {w}")
+    return _SCRATCHPAD_SUMMARY_PREFIX + "; ".join(parts) if parts else ""
+
+
+def _parse_persistent_summary(summary_str: Optional[str]) -> dict:
+    """Parse persistent summary string back into dictionary structure."""
+    if not summary_str:
+        return {"stale": {}, "warnings": []}
+    # Expected format: "[scratchpad summary] STALE: box0 (vv0) | edge_refs=2; WARNING: ..."
+    prefix = _SCRATCHPAD_SUMMARY_PREFIX
+    if not summary_str.startswith(prefix):
+        return {"stale": {}, "warnings": []}
+    content = summary_str[len(prefix):]
+    stale = {}
+    warnings = []
+    parts = content.split("; ")
+    for part in parts:
+        part = part.strip()
+        if part.startswith("STALE: "):
+            # Format: "STALE: box0 (vv0) | edge_refs=2"
+            stale_part = part[7:]  # Remove "STALE: "
+            # Parse "target (vversion) | edge_refs=N"
+            if " (" in stale_part:
+                target_end = stale_part.index(" (")
+                target_id = stale_part[:target_end]
+                rest = stale_part[target_end+1:]  # "vX) | edge_refs=2"
+                version_end = rest.index(")")
+                version = rest[:version_end]
+                refs = None
+                if "|" in rest:
+                    ref_part = rest.split("|", 1)[1].strip()
+                    if "_refs=" in ref_part:
+                        ref_type, count = ref_part.split("=")
+                        refs = {"type": ref_type, "count": int(count)}
+                stale[target_id] = {"version": version, "refs": refs}
+        elif part.startswith("WARNING: "):
+            warnings.append(part[9:])  # Remove "WARNING: "
+    return {"stale": stale, "warnings": warnings}
+
+
+def _build_step_summary(
+    tool_calls: List[Any],
+    tool_results: List[Dict[str, Any]],
+) -> List[dict]:
+    """
+    Build summary entries for a single ReAct step's tool calls + results.
+
+    Returns a list of summary dicts (one per tool call in the step).
+    Each dict has keys: type ("stale" or "warning"), target_id, version, refs, message
+    """
+    summary_entries: List[dict] = []
+    for tc, tr in zip(tool_calls, tool_results):
+        tc_func = tc.function if hasattr(
+            tc, 'function') else tc.get('function', {})
+        name = tc_func.get('name', 'unknown') if isinstance(
+            tc_func, dict) else getattr(tc_func, 'name', 'unknown')
+
+        # Parse arguments
+        try:
+            args = json.loads(tc_func.get('arguments', '{}')) if isinstance(
+                tc_func, dict) else json.loads(getattr(tc_func, 'arguments', '{}'))
+        except (json.JSONDecodeError, TypeError):
+            args = {}
+
+        target_id = args.get("target_id") or args.get(
+            "target") or args.get("object") or args.get("object_name")
+
+        # Parse tool result content
+        content = tr.get("content", "") if isinstance(tr, dict) else str(tr)
+        try:
+            result_parsed = json.loads(content) if isinstance(
+                content, str) else content
+        except (json.JSONDecodeError, TypeError):
+            result_parsed = {"raw": content}
+
+        # Extract only what's NOT in DesignState
+        stale_topology = result_parsed.get(
+            "stale_topology", False) if isinstance(result_parsed, dict) else False
+
+        # Extract face/edge refs from args
+        edge_refs = args.get("edge_refs") or args.get("face_refs")
+        topology_version = args.get("topology_version")
+
+        # Extract success/failure
+        success = result_parsed.get("status") != "error" if isinstance(
+            result_parsed, dict) else True
+
+        # Emit stale topology info — NOT in DesignState
+        if stale_topology and target_id:
+            tv = topology_version if topology_version and topology_version != "0" else "unknown"
+            refs = None
+            if edge_refs:
+                ref_count = len(edge_refs) if isinstance(
+                    edge_refs, list) else 1
+                ref_type = "edge" if "edge" in str(
+                    edge_refs).lower() else "face"
+                refs = {"type": ref_type, "count": ref_count}
+            summary_entries.append({
+                "type": "stale",
+                "target_id": target_id,
+                "version": tv,
+                "refs": refs
+            })
+
+        # For non-stale operations, don't emit anything (all info in DesignState)
+    return summary_entries
+
+
+def _extract_system_warnings(scratchpad: List[Dict[str, Any]]) -> List[str]:
+    """Extract verification warnings from system messages in scratchpad."""
+    warnings = []
+    for msg in scratchpad:
+        if msg.get("role") == "system":
+            content = msg.get("content", "")
+            if content and ("WARNING" in content or "warning" in content.lower()):
+                truncated = content[:200] + \
+                    "..." if len(content) > 200 else content
+                # Ensure consistent WARNING: prefix
+                if not truncated.startswith("WARNING:"):
+                    truncated = f"WARNING: {truncated}"
+                warnings.append(truncated)
+    return warnings
+
+
+def _compact_scratchpad(
+    scratchpad: List[Dict[str, Any]],
+    persistent_summary: Optional[str] = None,
+) -> tuple[List[Dict[str, Any]], Optional[str]]:
+    """
+    Compact the scratchpad by merging older interactions into a persistent summary.
+
+    The persistent summary lives OUTSIDE the raw scratchpad and is stored on
+    the CADAgent instance. This function:
+    1. Processes ALL messages (recent + older) to track stale state
+    2. Keeps only the latest `_SCRATCHPAD_KEEP_RECENT` raw messages
+       (the persistent summary is NOT returned as a message)
+
+    Args:
+        scratchpad: List of raw messages (assistant tool_calls + tool results + system warnings)
+        persistent_summary: Existing summary string from previous compactions (or None)
+
+    Returns:
+        Tuple of (recent_messages, updated_persistent_summary)
+        - recent_messages: Last _SCRATCHPAD_KEEP_RECENT raw messages
+        - updated_persistent_summary: Merged summary string (or None if empty)
+    """
+    # Parse existing persistent summary into dict
+    summary_dict = _parse_persistent_summary(persistent_summary)
+
+    # FIRST PASS: Process ALL messages (recent + older) to track stale state
+    i = 0
+    while i < len(scratchpad):
+        msg = scratchpad[i]
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            tool_calls = msg.get("tool_calls", [])
+            step_tool_count = len(tool_calls)
+
+            # Collect corresponding tool results
+            tool_results = []
+            for j in range(step_tool_count):
+                if i + 1 + j < len(scratchpad) and scratchpad[i + 1 + j].get("role") == "tool":
+                    tool_results.append(scratchpad[i + 1 + j])
+                else:
+                    break
+
+            # Check for stale topology (add/update) and resolution
+            for tc, tr in zip(tool_calls, tool_results):
+                # Parse tool result
+                content = tr.get("content", "") if isinstance(
+                    tr, dict) else str(tr)
+                try:
+                    result_parsed = json.loads(content) if isinstance(
+                        content, str) else content
+                except (json.JSONDecodeError, TypeError):
+                    result_parsed = {"raw": content}
+
+                stale_topology = result_parsed.get(
+                    "stale_topology", False) if isinstance(result_parsed, dict) else False
+                success = result_parsed.get("status") != "error" if isinstance(
+                    result_parsed, dict) else True
+
+                # Get target_id
+                tc_func = tc.function if hasattr(
+                    tc, 'function') else tc.get('function', {})
+                args = {}
+                try:
+                    args = json.loads(tc_func.get('arguments', '{}')) if isinstance(
+                        tc_func, dict) else json.loads(getattr(tc_func, 'arguments', '{}'))
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+                target_id = args.get("target_id") or args.get(
+                    "target") or args.get("object") or args.get("object_name")
+
+                if not target_id:
+                    continue
+
+                if stale_topology:
+                    # Extract stale info
+                    edge_refs = args.get("edge_refs") or args.get("face_refs")
+                    topology_version = args.get("topology_version")
+                    tv = topology_version if topology_version and topology_version != "0" else "unknown"
+                    refs = None
+                    if edge_refs:
+                        ref_count = len(edge_refs) if isinstance(
+                            edge_refs, list) else 1
+                        ref_type = "edge" if "edge" in str(
+                            edge_refs).lower() else "face"
+                        refs = {"type": ref_type, "count": ref_count}
+                    # Update stale state (overwrites any existing entry)
+                    if target_id not in summary_dict["stale"]:
+                        summary_dict["stale"][target_id] = {}
+                    summary_dict["stale"][target_id]["version"] = topology_version if topology_version and topology_version != "0" else "unknown"
+                    if edge_refs:
+                        ref_count = len(edge_refs) if isinstance(
+                            edge_refs, list) else 1
+                        ref_type = "edge" if "edge" in str(
+                            edge_refs).lower() else "face"
+                        refs = {"type": ref_type, "count": ref_count}
+                        summary_dict["stale"][target_id]["refs"] = refs
+                # NOTE: No automatic stale-entry resolution on success.
+                # Resolution requires an authoritative topology-version signal
+                # (e.g., fresh get_edges/get_faces re-query), not mere status != "error".
+
+        elif msg.get("role") == "system":
+            # Extract warnings from system messages
+            warnings = _extract_system_warnings([msg])
+            summary_dict["warnings"].extend(warnings)
+            # Keep only last 10 warnings
+            if len(summary_dict["warnings"]) > 10:
+                summary_dict["warnings"] = summary_dict["warnings"][-10:]
+        i += 1
+
+    # SECOND PASS: Keep only recent raw messages for output
+    recent = scratchpad[-_SCRATCHPAD_KEEP_RECENT:]
+
+    # Format updated summary dict to string
+    updated_summary = _format_persistent_summary(summary_dict)
+
+    # Never return None for summary - use empty string
+    return scratchpad[-_SCRATCHPAD_KEEP_RECENT:], updated_summary
+
+
 class CADAgent:
     MAX_RETRIES = 3
     MAX_STEPS = 15
@@ -288,6 +584,10 @@ class CADAgent:
         # BIP 8.3: Bounding-box constraints from user request (e.g., "fit within 100 x 50 x 20 mm")
         # {"max_x": 100.0, "max_y": 50.0, "max_z": 20.0}
         self._bbox_constraints: Optional[Dict[str, float]] = None
+
+        # Persistent scratchpad summary buffer for bounded compaction
+        # Stores merged historical summary across compaction rounds
+        self._scratchpad_persistent_summary: Optional[str] = None
 
     # BIP 10.3: Design conventions management methods
     def record_design_convention(
@@ -1807,7 +2107,13 @@ class CADAgent:
 
             # 4. Build messages from the compiled context: system (selective
             #     state) + relevant conversation + scratchpad.
+            # Compact scratchpad before sending to LLM to bound token growth.
+            scratchpad, self._scratchpad_persistent_summary = _compact_scratchpad(
+                scratchpad, self._scratchpad_persistent_summary)
+            # Build system context with persistent summary if available
             dynamic_system = compiled.system_context
+            if self._scratchpad_persistent_summary:
+                dynamic_system = dynamic_system + "\n\n" + self._scratchpad_persistent_summary
             messages = [{"role": "system", "content": dynamic_system}
                         ] + compiled.conversation + scratchpad
 
@@ -2182,6 +2488,14 @@ class CADAgent:
             # any geometry uncertainty/warning into the scratchpad.
             self._refresh_state_and_verify_geometry(
                 response, step, scratchpad)
+
+            # 10b. Scratchpad compaction: bound scratchpad growth by summarizing
+            # older tool interactions while preserving CAD-critical information
+            # (object names, face/edge refs, topology_version, success/failure,
+            # parameters, structured errors). Deterministic, no LLM calls.
+            scratchpad, self._scratchpad_persistent_summary = _compact_scratchpad(
+                scratchpad, self._scratchpad_persistent_summary)
+
             # 11. Loop repeats - do NOT return to user yet
             print(
                 f"[Agent] Step {step+1} complete. Continuing to next step...")
