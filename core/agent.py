@@ -592,6 +592,8 @@ class CADAgent:
 
         # Phase-aware routing: track the current intent plan across ReAct steps
         self._current_intent_plan = None
+        # Task completion flag: set to True when all phases are complete
+        self._task_complete = False
 
     def _update_phase_progress(self, tool_name: str, args: Dict[str, Any], result: Any) -> None:
         """Update phase progress based on successful tool execution.
@@ -641,6 +643,13 @@ class CADAgent:
             self._current_intent_plan.advance_phase()
             print(
                 f"[Agent] Phase advanced to: {self._current_intent_plan.current_intent()}")
+
+            # If all phases are complete (no current intent), mark task as complete
+            # so the ReAct loop can terminate cleanly after this step
+            if self._current_intent_plan.current_intent() is None:
+                self._task_complete = True
+                print(
+                    f"[Agent] All task phases complete. Will terminate after this step.")
 
     # BIP 10.3: Design conventions management methods
     def record_design_convention(
@@ -2062,6 +2071,26 @@ class CADAgent:
         for step in range(self.MAX_STEPS):
             print(f"\n=== [ReAct Step {step+1}/{self.MAX_STEPS}] ===")
 
+            # Check if task is complete (all phases done) - terminate cleanly
+            if getattr(self, "_task_complete", False):
+                print(f"[Agent] All task phases complete. Terminating turn.")
+                # If the LLM gave a final response in the last step, it would have been
+                # handled by _evaluate_termination. Since we're here, check if there's
+                # a final response to return.
+                # For now, return a completion message
+                completion_msg = "Task completed successfully."
+                self.history.append(
+                    {"role": "assistant", "content": completion_msg})
+                self.conversation.add_assistant(completion_msg)
+                if self._capture_trace:
+                    self._trace.append({
+                        "step": step + 1,
+                        "type": "task_complete",
+                        "message": completion_msg,
+                        "termination_reason": "task_complete",
+                    })
+                return completion_msg, session_tools
+
             # BIP 10.4b / A6.4: pre-step termination evaluation. The overall
             # wall-clock deadline is checked here (before the step's tools/
             # state/LLM work), identical to its original location. Does NOT
@@ -2637,6 +2666,21 @@ class CADAgent:
             # parameters, structured errors). Deterministic, no LLM calls.
             scratchpad, self._scratchpad_persistent_summary = _compact_scratchpad(
                 scratchpad, self._scratchpad_persistent_summary)
+
+            # Check if all task phases are complete - terminate cleanly
+            if getattr(self, "_task_complete", False):
+                print(f"[Agent] All task phases complete. Terminating turn.")
+                # Return final response (the LLM already gave a response in the last step,
+                # but we need to check if there's a final response to give)
+                # The scratchpad has the last tool result; we can return a completion
+                # Check if there's a meaningful final response in history/scratchpad
+                # If the LLM already gave a final response in the last step, it would have been handled
+                # in _evaluate_termination. Since we're here, the LLM made tool calls.
+                # We should give the LLM one more chance to provide a final response
+                # OR we can just return with a simple completion message.
+                # For now, let the loop continue but the next iteration will hit
+                # the pre-step termination check which will see _task_complete
+                pass
 
             # 11. Loop repeats - do NOT return to user yet
             print(

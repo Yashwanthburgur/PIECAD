@@ -196,8 +196,14 @@ class ToolRouter:
         allowed = set()
 
         # Add tools from allowed categories
+        # Note: "primitive" category is intentionally NOT added for create_base.
+        # The specific_tools list for create_base already explicitly enumerates
+        # the intended primitive tools. Including the full "primitive" category
+        # would pull in ALL primitive tools from the registry (including MCP-provided
+        # ones), which defeats phase-aware gating in production.
         for cat in config.get("categories", []):
-            allowed.update(self.registry.get_by_category(cat))
+            if cat != "primitive":
+                allowed.update(self.registry.get_by_category(cat))
 
         # Add specific tools for this phase
         for tool in config.get("specific_tools", []):
