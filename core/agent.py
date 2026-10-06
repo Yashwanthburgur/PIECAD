@@ -18,6 +18,7 @@ from core.context import (
     StaleTopologyError,
     ToolSelectionPlan,
 )
+from core.context.telemetry import estimate_tokens
 from core.intent import IntentClassifier
 from core.tool_registry import get_global_registry, infer_capability_from_schema
 from core.operations import (
@@ -589,6 +590,58 @@ class CADAgent:
         # Stores merged historical summary across compaction rounds
         self._scratchpad_persistent_summary: Optional[str] = None
 
+        # Phase-aware routing: track the current intent plan across ReAct steps
+        self._current_intent_plan = None
+
+    def _update_phase_progress(self, tool_name: str, args: Dict[str, Any], result: Any) -> None:
+        """Update phase progress based on successful tool execution.
+
+        This method checks if the completed tool satisfies a required subtask
+        for the current phase and advances the phase if all requirements are met.
+
+        Args:
+            tool_name: Name of the successfully executed tool
+            args: Arguments passed to the tool
+            result: Result of the tool execution
+        """
+        if self._current_intent_plan is None:
+            return
+
+        # Map tool names to subtask names
+        tool_to_subtask = {
+            "box": "box",
+            "cylinder": "cylinder",
+            "sphere": "sphere",
+            "cone": "cone",
+            "torus": "torus",
+            "wedge": "wedge",
+            "helix": "helix",
+            "prism": "prism",
+            "fillet": "fillet",
+            "chamfer": "chamfer",
+            "shell": "shell",
+            "hole": "hole",
+            "get_faces": "get_faces",
+            "get_edges": "get_edges",
+            "get_mass_properties": "get_mass_properties",
+            "get_bom": "get_bom",
+            "export": "export",
+        }
+
+        subtask = tool_to_subtask.get(tool_name)
+        if subtask is None:
+            return
+
+        # Mark the subtask as complete for the current phase
+        self._current_intent_plan.mark_subtask_complete(subtask)
+
+        # Check if the current phase is now complete
+        if self._current_intent_plan.is_phase_complete():
+            # Advance to the next phase
+            self._current_intent_plan.advance_phase()
+            print(
+                f"[Agent] Phase advanced to: {self._current_intent_plan.current_intent()}")
+
     # BIP 10.3: Design conventions management methods
     def record_design_convention(
         self,
@@ -666,12 +719,30 @@ class CADAgent:
             - intent_tool_plan: The tool selection plan from intent classifier
         """
         intent_result = self.intent_classifier.classify(user_message)
-        intent_plan = self.intent_classifier.to_context_plan(
-            intent_result, user_message)
-        intent_tool_plan = intent_result.tool_selection_plan
-        print(f"[Agent] Intent classified: {intent_result.primary_intent} "
-              f"(confidence={intent_result.confidence:.2f}, "
-              f"tools={len(intent_result.required_tools)})")
+
+        # Check for vague continuation: if the message is classified as "vague"
+        # with no ordered requirements, and we have an existing active plan,
+        # preserve the existing plan instead of creating a new one.
+        if (intent_result.primary_intent == "vague"
+                and not intent_result.ordered_requirements
+                and self._current_intent_plan is not None):
+            # Vague continuation - preserve existing plan
+            intent_plan = self._current_intent_plan
+            intent_tool_plan = None
+            print(f"[Agent] Preserving existing intent plan for vague continuation: "
+                  f"phase={intent_plan.current_intent()}, "
+                  f"phase_index={intent_plan.phase_index}")
+        else:
+            # Normal classification - create new plan
+            intent_plan = self.intent_classifier.to_context_plan(
+                intent_result, user_message)
+            intent_tool_plan = intent_result.tool_selection_plan
+            print(f"[Agent] Intent classified: {intent_result.primary_intent} "
+                  f"(confidence={intent_result.confidence:.2f}, "
+                  f"tools={len(intent_result.required_tools)})")
+            # Store for potential continuation preservation
+            self._current_intent_plan = intent_plan
+
         return intent_plan, intent_tool_plan
     # Deterministic CAD-kernel failure markers. A kernel/geometry failure is
     # NEVER transient, even when its message happens to contain a transient-
@@ -2035,20 +2106,23 @@ class CADAgent:
             # 2b. Sync registry with current tool schemas (infers capabilities for new tools)
             self.router.sync_registry(all_tools)
 
-            # 2c. Get state-gated tools from new capability-based router
-            router_tools = self.router.filter_tools(all_tools, state_objects)
-
-            # 2d. Update the authoritative DesignState from the live CAD state.
-            self._update_design_state(state_json)
-
             # 3. INTENT CLASSIFICATION: classify user intent once per turn (first step)
             #    and reuse the plan for all ReAct steps in this turn.
             if step == 0:
                 intent_plan, intent_tool_plan = self._classify_intent(
                     user_message)
+                # _classify_intent now handles preservation logic internally
+                # and updates self._current_intent_plan as needed
             else:
-                intent_plan = None
+                intent_plan = self._current_intent_plan
                 intent_tool_plan = None
+
+            # 2c. Get phase-aware tools from router (pass plan and tool_plan for phase gating)
+            router_tools = self.router.filter_tools(
+                all_tools, state_objects, intent_plan, intent_tool_plan)
+
+            # 2d. Update the authoritative DesignState from the live CAD state.
+            self._update_design_state(state_json)
 
             # 3. Compile a SELECTIVE context via the ContextEngine (BIP 4.2).
             compiled = self._compile_context(
@@ -2060,6 +2134,32 @@ class CADAgent:
             )
             # Use compiled tools (which already includes plan + router via compiler._select_tools)
             tools = compiled.tools
+
+            # Guard: ensure final tool set does not exceed router's phase-authoritative set.
+            # This prevents any compiler/router divergence from expanding the tool set beyond
+            # what the phase-aware router allows.
+            if intent_plan and hasattr(self.router, "get_active_tools"):
+                try:
+                    state_objs = []
+                    if self.design_state and hasattr(self.design_state, "objects"):
+                        state_objs = [o.to_dict(minimal=True)
+                                      for o in self.design_state.objects.values()]
+                    router_active = set(self.router.get_active_tools(
+                        state_objs, intent_plan, intent_tool_plan))
+                    print(
+                        f"[DIAG-GUARD] Step {step+1}: router_active={len(router_active)} before_guard={len(tools)}")
+                    # Filter compiled tools to only those allowed by phase-aware router
+                    before = len(tools)
+                    tools = [t for t in tools if self.router._schema_name(
+                        t) in router_active]
+                    after = len(tools)
+                    filtered = [self.router._schema_name(t) for t in tools]
+                    print(
+                        f"[DIAG-GUARD] Step {step+1}: before={before} after={after} filtered={sorted(filtered)}")
+                except Exception as e:
+                    print(f"[DIAG-GUARD] Step {step+1}: ERROR {e}")
+                    # Fail open: if guard fails, use compiler result (preserves legacy behavior)
+                    pass
 
             # BIP 10.5: Router token-savings instrumentation.
             # Measure the token cost difference between ungated (all_tools) and
@@ -2105,6 +2205,31 @@ class CADAgent:
                 f"(capability-routed + plan-required)"
             )
 
+            # DIAGNOSTIC: trace tool list before LLM call
+            current_phase = "none"
+            if intent_plan and hasattr(intent_plan, "current_intent"):
+                current_phase = intent_plan.current_intent() or "none"
+
+            # Trace agent's router (essential diagnostic)
+            router_active = []
+            if intent_plan and hasattr(self.router, "get_active_tools"):
+                try:
+                    state_objs = []
+                    if self.design_state and hasattr(self.design_state, "objects"):
+                        state_objs = [o.to_dict(minimal=True)
+                                      for o in self.design_state.objects.values()]
+                    router_active = self.router.get_active_tools(
+                        state_objs, intent_plan, intent_tool_plan)
+                except Exception:
+                    pass
+
+            print(
+                f"[DIAG] Step {step+1}: phase={current_phase} "
+                f"router_active={len(router_active)} compiled_tools={len(tools)} "
+                f"provider_tools={len(tools)} "
+                f"first_tools={sorted([t['function']['name'] for t in tools])[:20]}"
+            )
+
             # 4. Build messages from the compiled context: system (selective
             #     state) + relevant conversation + scratchpad.
             # Compact scratchpad before sending to LLM to bound token growth.
@@ -2116,6 +2241,19 @@ class CADAgent:
                 dynamic_system = dynamic_system + "\n\n" + self._scratchpad_persistent_summary
             messages = [{"role": "system", "content": dynamic_system}
                         ] + compiled.conversation + scratchpad
+
+            # Diagnostic estimates for the FINAL provider payload (chars/4 heuristic).
+            # These are estimates of what is actually sent to the provider, distinct from
+            # the compiler's pre-scratchpad estimates. Not exact provider token counts.
+            if compiled.telemetry is not None:
+                compiled.telemetry.estimated_final_messages_tokens = estimate_tokens(
+                    json.dumps(messages, default=str))
+                compiled.telemetry.estimated_dynamic_system_tokens = estimate_tokens(
+                    dynamic_system)
+                compiled.telemetry.estimated_scratchpad_tokens = estimate_tokens(
+                    json.dumps(scratchpad, default=str))
+                compiled.telemetry.estimated_persistent_summary_tokens = estimate_tokens(
+                    self._scratchpad_persistent_summary or "")
 
             # 6. Get intent from LLM.
             #    Transient provider/transport failures (connection drops,
@@ -2407,6 +2545,10 @@ class CADAgent:
                     out=out,
                     requested_args=requested_args_for_recording,
                 )
+
+                # Phase-aware routing: track phase completion for successful mutations
+                if success and hasattr(self, '_current_intent_plan') and self._current_intent_plan is not None:
+                    self._update_phase_progress(name, args, out)
 
                 # Record tool health for dynamic availability tracking
                 self.router.record_tool_result(

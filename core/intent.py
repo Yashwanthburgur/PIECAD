@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Set
 from core.context.plan import (
     ContextPlan,
     ToolSelectionPlan,
+    TaskRequirement,
     REASONING_DEFAULT,
     REASONING_INSPECT,
     REASONING_MODIFY,
@@ -39,6 +40,8 @@ _INTENT_KEYWORDS: Dict[str, Dict[str, Any]] = {
         "category": "primitive",
         "reasoning": REASONING_DEFAULT,
         "confidence": 0.85,
+        # Phase requirement: single primitive creation
+        "phase_subtasks": ["box", "cylinder", "sphere", "cone", "torus", "wedge", "helix", "prism"],
     },
     # Sketch + extrude workflow
     "sketch_extrude": {
@@ -49,6 +52,7 @@ _INTENT_KEYWORDS: Dict[str, Dict[str, Any]] = {
         "category": "sketch",
         "reasoning": REASONING_DEFAULT,
         "confidence": 0.85,
+        "phase_subtasks": ["sketch", "extrude"],
     },
     # Edge modifications (fillet, chamfer)
     "edge_modify": {
@@ -60,8 +64,10 @@ _INTENT_KEYWORDS: Dict[str, Dict[str, Any]] = {
         "produces": ["solid"],
         "reasoning": REASONING_MODIFY,
         "confidence": 0.9,
+        # Phase requirement: BOTH fillet AND chamfer
+        "phase_subtasks": ["fillet", "chamfer"],
     },
-    # Face modifications (hole, shell)
+    # Face modifications (hole, shell) - split into separate phases
     "face_modify": {
         "keywords": [
             "hole", "drill", "bore", "countersink", "thread", "tapped",
@@ -72,6 +78,8 @@ _INTENT_KEYWORDS: Dict[str, Dict[str, Any]] = {
         "produces": ["solid"],
         "reasoning": REASONING_MODIFY,
         "confidence": 0.9,
+        # This will be split into shell and holes phases based on keywords
+        "phase_subtasks": ["shell", "hole"],
     },
     # Boolean operations
     "boolean_ops": {
@@ -84,6 +92,7 @@ _INTENT_KEYWORDS: Dict[str, Dict[str, Any]] = {
         "produces": ["solid"],
         "reasoning": REASONING_BOOLEAN,
         "confidence": 0.9,
+        "phase_subtasks": ["boolean"],
     },
     # Patterning
     "pattern_ops": {
@@ -96,6 +105,7 @@ _INTENT_KEYWORDS: Dict[str, Dict[str, Any]] = {
         "produces": ["pattern"],
         "reasoning": REASONING_DEFAULT,
         "confidence": 0.85,
+        "phase_subtasks": ["pattern_linear", "pattern_circular"],
     },
     # Inspection/measurement
     "inspect": {
@@ -107,6 +117,7 @@ _INTENT_KEYWORDS: Dict[str, Dict[str, Any]] = {
         "category": "query",
         "reasoning": REASONING_INSPECT,
         "confidence": 0.8,
+        "phase_subtasks": ["get_faces", "get_edges", "get_mass_properties", "get_bom"],
     },
     # Export
     "export_ops": {
@@ -117,6 +128,7 @@ _INTENT_KEYWORDS: Dict[str, Dict[str, Any]] = {
         "category": "query",
         "reasoning": REASONING_EXPORT,
         "confidence": 0.9,
+        "phase_subtasks": ["export"],
     },
     # Edit/modify existing feature
     "edit_feature": {
@@ -128,6 +140,7 @@ _INTENT_KEYWORDS: Dict[str, Dict[str, Any]] = {
         "category": "feature",
         "reasoning": REASONING_MODIFY,
         "confidence": 0.75,
+        "phase_subtasks": ["edit_feature"],
     },
     # Assembly/mating
     "assembly": {
@@ -139,6 +152,7 @@ _INTENT_KEYWORDS: Dict[str, Dict[str, Any]] = {
         "requires": ["solid"],
         "reasoning": REASONING_DEFAULT,
         "confidence": 0.8,
+        "phase_subtasks": ["mate"],
     },
     # Deletion/undo
     "delete_undo": {
@@ -148,6 +162,7 @@ _INTENT_KEYWORDS: Dict[str, Dict[str, Any]] = {
         "category": "feature",
         "reasoning": REASONING_MODIFY,
         "confidence": 0.8,
+        "phase_subtasks": ["delete_feature", "undo"],
     },
 }
 
@@ -182,6 +197,115 @@ def _merge_tool_lists(*lists: List[str]) -> List[str]:
     return out
 
 
+def _build_ordered_requirements(user_prompt: str, matched_intents: List[str]) -> List[TaskRequirement]:
+    """Build ordered task requirements from the user prompt and matched intents.
+
+    This creates the phase structure: create_base -> edge_modify -> shell -> holes -> inspect
+    """
+    text_l = (user_prompt or "").lower()
+    requirements: List[TaskRequirement] = []
+
+    # Phase 1: create_base - check for primitive creation keywords
+    if "create_base" in matched_intents:
+        # Check what primitive is requested
+        primitive_tools = ["box", "cylinder", "sphere",
+                           "cone", "torus", "wedge", "helix", "prism"]
+        req_tool = "box"  # default
+        for tool in primitive_tools:
+            if tool in text_l:
+                req_tool = tool
+                break
+        requirements.append(TaskRequirement(
+            name="create_base",
+            required_subtasks=[req_tool],
+            quantity=1
+        ))
+
+    # Phase 2: edge_modify - check for fillet/chamfer
+    if "edge_modify" in matched_intents:
+        # Both fillet and chamfer are required if both keywords present
+        subtasks = []
+        if "fillet" in text_l or "round" in text_l:
+            subtasks.append("fillet")
+        if "chamfer" in text_l or "bevel" in text_l:
+            subtasks.append("chamfer")
+        # If only "edge" or "radius" mentioned, default to both
+        if not subtasks:
+            subtasks = ["fillet", "chamfer"]
+        requirements.append(TaskRequirement(
+            name="edge_modify",
+            required_subtasks=subtasks,
+            quantity=1
+        ))
+
+    # Phase 3: shell - check for shell keywords specifically
+    shell_keywords = ["shell", "hollow", "thin wall", "container"]
+    if any(kw in text_l for kw in shell_keywords):
+        requirements.append(TaskRequirement(
+            name="shell",
+            required_subtasks=["shell"],
+            quantity=1
+        ))
+
+    # Phase 4: holes - check for hole keywords specifically
+    hole_keywords = ["hole", "drill", "bore",
+                     "countersink", "thread", "tapped"]
+    if any(kw in text_l for kw in hole_keywords):
+        # Check for quantity (e.g., "four holes")
+        quantity = 1
+        qty_match = re.search(r'\b(\d+)\s*(hole|holes)\b', text_l)
+        if qty_match:
+            quantity = int(qty_match.group(1))
+        elif "four" in text_l and "hole" in text_l:
+            quantity = 4
+        requirements.append(TaskRequirement(
+            name="holes",
+            required_subtasks=["hole"],
+            quantity=quantity
+        ))
+
+    # Phase 5: inspect - only if explicitly requested (not auto-added)
+    # Check for explicit inspection keywords that indicate the user wants verification
+    explicit_inspect_keywords = ["inspect", "check", "measure", "dimension", "volume", "mass",
+                                 "properties", "what is", "show", "list",
+                                 "center of mass", "bounding box", "bbox"]
+    explicit_inspect = any(kw in text_l for kw in explicit_inspect_keywords)
+    # Only add inspect phase if explicitly requested AND not just a side-effect of other keywords
+    # The "inspect" intent is matched by many keywords; we only add the phase if the user
+    # clearly wants post-completion verification
+    if "inspect" in matched_intents and explicit_inspect:
+        requirements.append(TaskRequirement(
+            name="inspect",
+            required_subtasks=["get_faces", "get_edges",
+                               "get_mass_properties", "get_bom"],
+            quantity=1
+        ))
+
+    # Phase 6: export - if explicitly requested
+    export_keywords = ["export", "save", "download", "stl", "step", "obj", "iges",
+                       "3mf", "format", "save as"]
+    if any(kw in text_l for kw in export_keywords) and "export_ops" in matched_intents:
+        requirements.append(TaskRequirement(
+            name="export_ops",
+            required_subtasks=["export"],
+            quantity=1
+        ))
+
+    # If no specific phases detected but we have intents, fall back to simple mapping
+    if not requirements and matched_intents:
+        for intent in matched_intents:
+            config = _INTENT_KEYWORDS.get(intent, {})
+            subtasks = config.get("phase_subtasks", [])
+            if subtasks:
+                requirements.append(TaskRequirement(
+                    name=intent,
+                    required_subtasks=subtasks,
+                    quantity=1
+                ))
+
+    return requirements
+
+
 @dataclass
 class IntentResult:
     """Result of intent classification."""
@@ -196,6 +320,8 @@ class IntentResult:
         default_factory=lambda: ["objects"])
     required_memory_sections: List[str] = field(default_factory=list)
     relevant_history_terms: List[str] = field(default_factory=list)
+    # Phase-aware fields
+    ordered_requirements: List[TaskRequirement] = field(default_factory=list)
 
 
 class IntentClassifier:
@@ -235,7 +361,12 @@ class IntentClassifier:
                 reasoning_mode=REASONING_VAGUE,
                 confidence=0.3,
                 ambiguity=0.8,
+                ordered_requirements=[],
             )
+
+        # Build ordered task requirements
+        ordered_requirements = _build_ordered_requirements(
+            user_prompt, matched)
 
         # Collect tools from matched intents
         all_tools: List[str] = []
@@ -304,6 +435,7 @@ class IntentClassifier:
             ambiguity=1.0 - best_confidence,
             required_state_sections=list(state_sections),
             required_memory_sections=list(memory_sections),
+            ordered_requirements=ordered_requirements,
         )
 
     def to_context_plan(self, result: IntentResult, user_prompt: str) -> ContextPlan:
@@ -321,4 +453,8 @@ class IntentClassifier:
                 "matched_intents": result.matched_intents,
                 "primary_intent": result.primary_intent,
             },
+            # Phase-aware fields
+            phase_index=0,
+            completed_subtasks={},
+            required_subtasks=result.ordered_requirements,
         )

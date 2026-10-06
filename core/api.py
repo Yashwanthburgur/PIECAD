@@ -68,6 +68,9 @@ def _finalize_turn(agent: CADAgent, reply: str, request_message: str,
     rpc_count = agent.adapter.get_rpc_count()
     # Reset RPC counter for next turn
     agent.adapter.reset_rpc_count()
+    # Existing per-step context telemetry (estimates + exact provider tokens).
+    # Exposed as-is; no new measurements are added here.
+    context_telemetry = agent.get_context_telemetry()
 
     # A3.2: Print compact console summary
     print(
@@ -80,6 +83,7 @@ def _finalize_turn(agent: CADAgent, reply: str, request_message: str,
         "total_tokens": total_tokens,
         "rpc_trips": rpc_count,
         "token_telemetry": token_telemetry,
+        "context_telemetry": context_telemetry,
     }
 
     # A3.4: Persist turn telemetry to JSONL file (best-effort, never fails the request)
@@ -114,6 +118,7 @@ def _finalize_turn(agent: CADAgent, reply: str, request_message: str,
             "duration_seconds": duration,
             "success": not is_error,
             "termination_reason": termination_reason,
+            "context_telemetry": context_telemetry,
         }
 
         with log_path.open("a", encoding="utf-8") as f:

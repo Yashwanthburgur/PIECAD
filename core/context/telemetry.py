@@ -72,6 +72,12 @@ class ContextTelemetry:
     llm_latency_ms: Optional[float] = None
     request_id: Optional[str] = None
 
+    # Final provider payload estimates (diagnostic, chars/4 heuristic)
+    estimated_final_messages_tokens: int = 0
+    estimated_dynamic_system_tokens: int = 0
+    estimated_scratchpad_tokens: int = 0
+    estimated_persistent_summary_tokens: int = 0
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "react_step": self.react_step,
@@ -90,6 +96,10 @@ class ContextTelemetry:
             "dropped_sections": list(self.dropped_sections),
             "compilation_time_ms": self.compilation_time_ms,
             "llm_latency_ms": self.llm_latency_ms,
+            "estimated_final_messages_tokens": self.estimated_final_messages_tokens,
+            "estimated_dynamic_system_tokens": self.estimated_dynamic_system_tokens,
+            "estimated_scratchpad_tokens": self.estimated_scratchpad_tokens,
+            "estimated_persistent_summary_tokens": self.estimated_persistent_summary_tokens,
         }
 
 

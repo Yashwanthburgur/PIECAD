@@ -296,15 +296,22 @@ class MutationGate:
         self._registry = registry
         self._current_operation_id: Optional[str] = None
 
-    def acquire(self, operation_id: str, timeout: float = -1.0) -> bool:
+        # Default bounded acquisition timeout (seconds) for physical lock.
+        # Can be overridden per-call via acquire(..., timeout=...).
+        self.DEFAULT_ACQUIRE_TIMEOUT = 10.0
+
+    def acquire(self, operation_id: str, timeout: float = -1.0):
         """Acquire the mutation gate for an operation.
 
         Args:
             operation_id: The operation acquiring the gate
-            timeout: Timeout in seconds (-1 = wait forever)
+            timeout: Timeout in seconds (-1 = use DEFAULT_ACQUIRE_TIMEOUT, 0 = non-blocking)
 
         Returns:
-            True if acquired, False if timeout or unresolved operation blocks.
+            tuple: (acquired: bool, error_type: Optional[str])
+                - (True, None) if acquired successfully
+                - (False, "unresolved_operation") if blocked by unresolved operation
+                - (False, "mutation_gate_timeout") if physical lock timeout
         """
         # First check if there's an unresolved operation blocking us. This is a
         # LOGICAL barrier (registry-derived) and deliberately does NOT depend on
@@ -315,17 +322,21 @@ class MutationGate:
                 # Check if we're the unresolved one (re-entry after reconciliation)
                 unresolved = self._registry.get_unresolved()
                 if operation_id not in unresolved:
-                    return False  # Blocked by another unresolved operation
+                    return False, "unresolved_operation"  # Blocked by another unresolved operation
 
+        # Use default timeout if -1 provided
         if timeout < 0:
-            acquired = self._lock.acquire()
-        else:
-            acquired = self._lock.acquire(timeout=timeout)
-        if acquired:
-            with self._meta:
-                self._current_operation_id = operation_id
-            self._registry.start(operation_id)
-        return acquired
+            timeout = self.DEFAULT_ACQUIRE_TIMEOUT
+
+        # Try to acquire physical lock with timeout
+        acquired = self._lock.acquire(timeout=timeout)
+        if not acquired:
+            return False, "mutation_gate_timeout"
+
+        with self._meta:
+            self._current_operation_id = operation_id
+        self._registry.start(operation_id)
+        return True, None
 
     def release(self, operation_id: str) -> bool:
         """Release the mutation gate.

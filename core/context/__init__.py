@@ -3,7 +3,6 @@
 Provides provider-independent state, memory, conversation, relevance, budgeting
 and compilation abstractions that a future Intent/Decision layer can plug into.
 """
-
 from .budget import ContextBudget
 from .compiler import CompiledContext, ContextCompiler
 from .conversation import ConversationContext, Turn
@@ -22,6 +21,7 @@ from .plan import (
 from .relevance import RelevanceEngine, RelevanceRule, CONCEPT_RULES
 from .state import DesignState, DesignObject, RecentOperation
 from .telemetry import ContextTelemetry, estimate_tokens
+from .topology_errors import StaleTopologyError
 
 __all__ = [
     "ContextBudget",
@@ -48,4 +48,5 @@ __all__ = [
     "RecentOperation",
     "ContextTelemetry",
     "estimate_tokens",
+    "StaleTopologyError",
 ]

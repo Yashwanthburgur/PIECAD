@@ -313,6 +313,9 @@ class ContextCompiler:
         registry = get_global_registry()
         router = ToolRouter(registry)
 
+        # Sync registry with available tools to ensure capabilities are inferred
+        router.sync_registry(available_tools)
+
         state_objects = []
         if design_state is not None:
             state_objects = [o.to_dict(minimal=True)
@@ -321,16 +324,29 @@ class ContextCompiler:
         # Use new capability-based router API with plan and tool_plan
         router_names = set(router.get_active_tools(
             state_objects, plan, tool_plan))
-        plan_names = set(plan.required_tools)
+
+        # If plan has an active ordered phase, router already returns phase-gated tools.
+        # Do NOT re-union with plan.required_tools (that would defeat phase gating).
+        # During active phase, only add tool_plan inspection/verification/recovery.
+        # During no active phase, add all tool_plan roles (legacy).
         explicit = set()
         if tool_plan is not None:
-            explicit = set(tool_plan.all_tools())
-            plan_names |= explicit
+            current_req = plan.current_requirement() if hasattr(
+                plan, "current_requirement") else None
+            if current_req is not None:
+                explicit = set(tool_plan.inspection +
+                               tool_plan.verification + tool_plan.recovery)
+            else:
+                explicit = set(tool_plan.all_tools())
 
-        # Final exposure = intersection of adapter surface with (router-active ∪
-        # plan-required ∪ explicit tool-plan names). This preserves the adapter's
-        # full capability while narrowing per-call exposure.
-        wanted = router_names | plan_names
+        # Legacy: only add plan.required_tools when NO active phase
+        current_req = plan.current_requirement() if hasattr(
+            plan, "current_requirement") else None
+        if current_req is None:
+            wanted = router_names | set(plan.required_tools) | explicit
+        else:
+            wanted = router_names | explicit
+
         chosen: List[Dict[str, Any]] = []
         seen: set = set()
         for schema in available_tools:

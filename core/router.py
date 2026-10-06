@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Set
 
 from core.tool_registry import ToolCapability, ToolRegistry, get_global_registry, infer_capability_from_schema
+from core.context.plan import ContextPlan, TaskRequirement
 
 
 class ToolRouter:
@@ -121,6 +122,99 @@ class ToolRouter:
         return self._count_solids(current_state_objects) > 0
 
     # ------------------------------------------------------------------ #
+    # Phase-aware tool selection
+    # ------------------------------------------------------------------ #
+    def _get_phase_gated_tools(self, plan: Optional[ContextPlan]) -> Set[str]:
+        """Tools allowed based on the current task phase.
+
+        This is the core phase-aware routing logic. It restricts tools
+        to only those relevant for the current phase.
+        """
+        if plan is None:
+            return set()
+
+        current_req = plan.current_requirement()
+        if current_req is None:
+            return set()
+
+        phase_name = current_req.name
+        required_subtasks = current_req.required_subtasks
+
+        # Map phase names to allowed tool categories and specific tools
+        phase_tool_map = {
+            "create_base": {
+                "categories": ["primitive"],
+                "specific_tools": ["box", "cylinder", "sphere", "cone", "torus", "wedge", "helix", "prism", "sketch", "extrude"],
+            },
+            "edge_modify": {
+                "categories": [],
+                "specific_tools": ["fillet", "chamfer", "get_edges"],
+            },
+            "shell": {
+                "categories": [],
+                "specific_tools": ["shell", "get_faces"],
+            },
+            "holes": {
+                "categories": [],
+                "specific_tools": ["hole", "get_faces"],
+            },
+            "inspect": {
+                "categories": ["query"],
+                "specific_tools": ["get_faces", "get_edges", "get_mass_properties", "get_bom", "export"],
+            },
+            "sketch_extrude": {
+                "categories": ["sketch"],
+                "specific_tools": ["sketch", "extrude", "pad", "pocket", "revolve", "loft", "sweep"],
+            },
+            "boolean_ops": {
+                "categories": [],
+                "specific_tools": ["boolean"],
+            },
+            "pattern_ops": {
+                "categories": ["assembly"],
+                "specific_tools": ["pattern_linear", "pattern_circular"],
+            },
+            "edit_feature": {
+                "categories": [],
+                "specific_tools": ["edit_feature"],
+            },
+            "assembly": {
+                "categories": ["assembly"],
+                "specific_tools": ["mate", "get_faces", "get_edges"],
+            },
+            "delete_undo": {
+                "categories": [],
+                "specific_tools": ["delete_feature", "undo"],
+            },
+            "export_ops": {
+                "categories": ["query"],
+                "specific_tools": ["export"],
+            },
+        }
+
+        config = phase_tool_map.get(phase_name, {})
+        allowed = set()
+
+        # Add tools from allowed categories
+        for cat in config.get("categories", []):
+            allowed.update(self.registry.get_by_category(cat))
+
+        # Add specific tools for this phase
+        for tool in config.get("specific_tools", []):
+            if tool in self.registry.all_names():
+                allowed.add(tool)
+
+        # Always include inspection, verification, recovery tools
+        # These are safety/utility tools needed in every phase
+        # Note: bootstrap tools (primitives) are NOT included in all phases
+        # They are only available in create_base phase or when state allows
+        allowed.update(self.registry.get_by_role("inspection"))
+        allowed.update(self.registry.get_by_role("verification"))
+        allowed.update(self.registry.get_by_role("recovery"))
+
+        return allowed
+
+    # ------------------------------------------------------------------ #
     # Capability-based gating
     # ------------------------------------------------------------------ #
     def _get_state_gated_tools(self, current_state_objects: Any) -> Set[str]:
@@ -173,24 +267,58 @@ class ToolRouter:
 
         Considers:
         - CAD state (solids, sketches, edges, faces)
-        - ContextPlan (required_tools, relevant_object_ids)
+        - ContextPlan (required_tools, relevant_object_ids, phase)
         - ToolSelectionPlan (primary, optional, inspection, verification, recovery)
         - Tool health/availability
         """
-        # State-gated base
-        active = self._get_state_gated_tools(current_state_objects)
+        # Determine if we have an active ordered phase
+        current_req = None
+        if plan is not None and hasattr(plan, "current_requirement"):
+            current_req = plan.current_requirement()
 
-        # Plan-required tools (always exposed even if state would gate them)
-        if plan is not None and hasattr(plan, "required_tools"):
-            for t in plan.required_tools:
-                if self.is_tool_available(t):
-                    active.add(t)
+        if current_req is not None:
+            # ACTIVE PHASE: Phase-gated tools are authoritative.
+            # Start with phase-gated tools, then apply minimal state validation.
+            active = self._get_phase_gated_tools(plan)
 
-        # ToolSelectionPlan roles
-        if tool_plan is not None:
-            for t in tool_plan.all_tools():
-                if self.is_tool_available(t):
-                    active.add(t)
+            # Minimal state validation: remove tools that require unavailable state
+            # (e.g., edge tools when no edges exist, face tools when no faces exist)
+            has_edges = self._has_edges(current_state_objects)
+            has_faces = self._has_faces(current_state_objects)
+            has_sketch = self._has_sketch(current_state_objects)
+
+            if not has_edges:
+                # Remove tools that require edges
+                edge_tools = self.registry.get_by_requires("edge")
+                active -= edge_tools
+            if not has_faces:
+                # Remove tools that require faces
+                face_tools = self.registry.get_by_requires("face")
+                active -= face_tools
+            if not has_sketch:
+                # Remove tools that require sketches
+                sketch_tools = self.registry.get_by_requires("sketch")
+                active -= sketch_tools
+
+            # ToolSelectionPlan: only inspection/verification/recovery during active phase
+            if tool_plan is not None:
+                for t in tool_plan.inspection + tool_plan.verification + tool_plan.recovery:
+                    if self.is_tool_available(t):
+                        active.add(t)
+
+        else:
+            # NO ACTIVE PHASE (legacy): use state-gated + plan-required + tool_plan.all_tools
+            active = self._get_state_gated_tools(current_state_objects)
+
+            if plan is not None and hasattr(plan, "required_tools"):
+                for t in plan.required_tools:
+                    if self.is_tool_available(t):
+                        active.add(t)
+
+            if tool_plan is not None:
+                for t in tool_plan.all_tools():
+                    if self.is_tool_available(t):
+                        active.add(t)
 
         return sorted(active)
 
