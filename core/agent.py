@@ -2031,6 +2031,9 @@ class CADAgent:
             print(
                 f"[Agent] Bounding-box constraints detected: {self._bbox_constraints}")
 
+        # Reset per-turn task completion flag (each handle_message is a new user turn).
+        self._task_complete = False
+
         # Reset per-turn context telemetry (each handle_message is a new turn).
         self._context_telemetry = []
 
